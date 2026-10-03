@@ -1,4 +1,3 @@
-"""Pure-python tests (no ROS needed): python3 -m pytest test/"""
 import math
 
 import numpy as np
