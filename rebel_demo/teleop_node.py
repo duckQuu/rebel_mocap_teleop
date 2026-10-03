@@ -1,30 +1,3 @@
-"""teleop node - your hand (OptiTrack rigid body, via mocap4ros2_optitrack TF) drives the igus.
-
-Pipeline, every cycle (default 60 Hz):
-  1. TF lookup  base_frame <- hand_frame          (hand pose in the robot base frame)
-  2. tracking check: missing / stale / frozen pose -> HOLD (robot keeps its last command)
-  3. LOW-PASS filter on the hand pose            (position: 1st-order; orientation: slerp)
-  4. clutch + mapping: relative (default) or absolute, scale, workspace clamp
-  5. real-time IK  target flange pose -> 6 joint angles, seeded with the last command
-  6. joint speed limit                            (max_joint_speed_deg per joint)
-  7. publish sensor_msgs/JointState on command_topic (/joint_command for Isaac Sim)
-
-Clutch (relative mode): call the service  ~/engage  (std_srvs/SetBool)
-  ros2 service call /rebel_teleop/engage std_srvs/srv/SetBool "{data: true}"    # start following
-  ros2 service call /rebel_teleop/engage std_srvs/srv/SetBool "{data: false}"   # stop, reposition hand
-While engaged:  robot_target = robot_pose_at_engage + scale * (hand_now - hand_at_engage)
-
-Parameters (defaults in brackets)
-  base_frame [base_link]  hand_frame [HAND]          TF frames (hand = rigid body name in mocap config)
-  rate_hz [60]            mode [relative]            relative | absolute
-  scale [1.0]             orientation [false]        false = position only (wrist free), true = full pose
-  cutoff_hz [4.0]         low-pass cutoff for the hand pose
-  max_joint_speed_deg [45]  stale_timeout [0.2]      s without a new pose -> hold
-  workspace_min [-0.7,-0.7,-0.3]  workspace_max [0.7,0.7,0.8]   target clamp in base_frame [m]
-  command_topic [/joint_command]
-  publish_joint_states [false]   true = also publish /joint_states (RViz-only testing, no Isaac)
-  feedback_from_joint_states [false]  true = seed IK from Isaac's /joint_states instead of last command
-"""
 import math
 
 import numpy as np
@@ -69,8 +42,6 @@ def slerp(q0, q1, a):
 
 
 class PoseLowPass:
-    """First-order low-pass on position + slerp on orientation; alpha from cutoff and dt."""
-
     def __init__(self, cutoff_hz):
         self.fc = cutoff_hz
         self.p = None
@@ -118,13 +89,13 @@ class Teleop(Node):
             self.create_subscription(JointState, "/joint_states", self.on_js, 10)
         self.create_service(SetBool, "~/engage", self.on_engage)
 
-        self.q_cmd = HOME.copy()           # last commanded joints (the robot starts at HOME)
+        self.q_cmd = HOME.copy()           
         self.q_meas = None
         self.last_stamp = None
         self.last_raw = None
         self.frozen_since = None
-        self.hand_ref = None               # (p, R) of the hand at engage
-        self.robot_ref = None              # flange pose at engage
+        self.hand_ref = None               
+        self.robot_ref = None              
         self.dt = 1.0 / self.rate
         self.create_timer(self.dt, self.step)
         self.get_logger().info(
@@ -132,20 +103,18 @@ class Teleop(Node):
             f"{'full pose' if self.use_orientation else 'position only'}, {self.rate:.0f} Hz -> {topic}"
             + ("" if self.engaged else "  (NOT engaged: call ~/engage true)"))
 
-    # ------------------------------------------------------------------ inputs
     def on_js(self, msg):
         if all(n in msg.name for n in JOINT_NAMES):
             self.q_meas = np.array([msg.position[msg.name.index(n)] for n in JOINT_NAMES])
 
     def on_engage(self, req, res):
         self.engaged = bool(req.data)
-        self.hand_ref = None                # re-anchor on the next cycle
+        self.hand_ref = None                
         res.success, res.message = True, "engaged" if self.engaged else "released (robot holds)"
         self.get_logger().info(res.message)
         return res
 
     def read_hand(self):
-        """Hand pose in base_frame, or None if missing / stale / frozen."""
         try:
             t = self.tf.lookup_transform(self.base_frame, self.hand_frame, Time())
         except TransformException:
@@ -156,7 +125,7 @@ class Teleop(Node):
             return None
         tr, rq = t.transform.translation, t.transform.rotation
         raw = (tr.x, tr.y, tr.z, rq.x, rq.y, rq.z, rq.w)
-        if raw == self.last_raw:                           # bit-identical = frozen (marker loss)
+        if raw == self.last_raw:                           
             self.frozen_since = self.frozen_since or now
             if now - self.frozen_since > self.stale:
                 return None
@@ -165,46 +134,43 @@ class Teleop(Node):
         self.last_raw = raw
         return np.array(raw[:3]), np.array(raw[3:])
 
-    # ------------------------------------------------------------------ main loop
     def step(self):
         hand = self.read_hand()
         if hand is None:
-            self.hand_ref = None                           # re-anchor when tracking returns
-            self.filter.p = None                           # restart the filter (no glide from a stale pose)
-            self.publish(self.q_cmd)                       # HOLD
+            self.hand_ref = None                           
+            self.filter.p = None                           
+            self.publish(self.q_cmd)                       
             return
-        p_f, q_f = self.filter(hand[0], hand[1], self.dt)  # 3. low-pass
+        p_f, q_f = self.filter(hand[0], hand[1], self.dt)  
         R_f = quat_to_matrix(q_f)
         seed = self.q_meas if (self.use_feedback and self.q_meas is not None) else self.q_cmd
 
         if not self.engaged:
             self.publish(self.q_cmd)
             return
-        # 4. mapping
         if self.mode == "relative":
-            if self.hand_ref is None:                      # anchor: hand now <-> robot now
+            if self.hand_ref is None:                      
                 self.hand_ref = (p_f.copy(), R_f.copy())
                 self.robot_ref = fk(self.q_cmd)
             T = self.robot_ref.copy()
             T[:3, 3] = self.robot_ref[:3, 3] + self.scale * (p_f - self.hand_ref[0])
             if self.use_orientation:
                 T[:3, :3] = (R_f @ self.hand_ref[1].T) @ self.robot_ref[:3, :3]
-        else:                                               # absolute: flange = hand pose
+        else:                                               
             T = np.eye(4)
             T[:3, :3], T[:3, 3] = R_f, p_f
         T[:3, 3] = np.clip(T[:3, 3], self.ws_min, self.ws_max)
         self.publish_target(T)
 
-        # 5. real-time IK, warm-started from the last command
         w_rot = 0.3 if self.use_orientation else 0.0
         q_ik, pe, re = ik(T, seed, w_rot=w_rot, iters=25, q_rest=None if self.use_orientation else HOME)
         if pe > 0.02:
             self.get_logger().warn(f"target not reachable ({pe * 1000:.0f} mm off) - moving as close as possible",
                                    throttle_duration_sec=1.0)
-        # 6. joint speed limit
+          
         dq = np.clip(q_ik - self.q_cmd, -self.vmax * self.dt, self.vmax * self.dt)
         self.q_cmd = np.clip(self.q_cmd + dq, LOWER, UPPER)
-        self.publish(self.q_cmd)                           # 7.
+        self.publish(self.q_cmd)                    
 
     def publish(self, q):
         msg = JointState()
