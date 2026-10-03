@@ -1,3 +1,5 @@
+"""igus ReBeL 6-DoF kinematics (numbers identical to urdf/igus_rebel_6dof.urdf,
+from CommonplaceRobotics/iRC_ROS irc_ros_description, rebel_version 00/01)."""
 import math
 
 import numpy as np
@@ -7,6 +9,7 @@ JOINT_LABELS = ["J1 base", "J2 shoulder", "J3 elbow", "J4 forearm roll", "J5 wri
 JOINT_COLORS = [(0.90, 0.10, 0.10), (1.00, 0.55, 0.00), (0.95, 0.85, 0.10),
                 (0.20, 0.80, 0.20), (0.10, 0.60, 1.00), (0.70, 0.30, 1.00)]
 
+# (origin xyz [m], origin rpy [rad], axis, lower [rad], upper [rad])
 JOINTS = [
     ((0, 0, 0.100), (0, 0, 0), (0, 0, -1), -math.pi * 179 / 180, math.pi * 179 / 180),
     ((0, 0, 0.149), (0, math.pi / 6, 0), (0, 1, 0), -math.pi * 11 / 18, math.pi * 11 / 18),
@@ -18,10 +21,10 @@ JOINTS = [
 ]
 LOWER = np.array([j[3] for j in JOINTS])
 UPPER = np.array([j[4] for j in JOINTS])
-VMAX = math.radians(45.0)                       
+VMAX = math.radians(45.0)                       # rad/s, every joint (URDF velocity limit)
 
-HOME = np.radians([0.0, 20.0, 60.0, 0.0, 60.0, 0.0])        
-STRAIGHT_UP = np.radians([0.0, -30.0, -30.0, 0.0, 7.5, 0.0])  
+HOME = np.radians([0.0, 20.0, 60.0, 0.0, 60.0, 0.0])        # "ready" pose, flange in front, pointing down
+STRAIGHT_UP = np.radians([0.0, -30.0, -30.0, 0.0, 7.5, 0.0])  # URDF has built-in 30/30/-7.5 deg offsets
 
 
 def rot(axis, a):
@@ -36,11 +39,12 @@ def rpy(r, p, y):
     return rot((0, 0, 1), y) @ rot((0, 1, 0), p) @ rot((1, 0, 0), r)
 
 
-_FLANGE_R = rpy(0, -math.pi / 2, 0)            
+_FLANGE_R = rpy(0, -math.pi / 2, 0)            # link_8 -> flange (tool0): x axis points out of the flange
 _FLANGE_P = np.array([0, 0, 0.0012])
 
 
 def quat_to_matrix(q):
+    """[x, y, z, w] -> 3x3 rotation matrix."""
     x, y, z, w = np.asarray(q, float) / np.linalg.norm(q)
     return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
                      [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
@@ -48,6 +52,7 @@ def quat_to_matrix(q):
 
 
 def joint_frames(q):
+    """[(position, rotation axis)] of each joint in base_link for joint angles q [rad]."""
     R, p, out = np.eye(3), np.zeros(3), []
     for (xyz, r_p_y, ax, _, _), qi in zip(JOINTS, q):
         p = p + R @ np.array(xyz, float)
@@ -69,13 +74,14 @@ def fk(q):
     return T
 
 
+# ---------------------------------------------------------------- IK (damped least squares)
 def _log_so3(Rm):
     c = np.clip((np.trace(Rm) - 1) / 2, -1, 1)
     th = math.acos(c)
     v = np.array([Rm[2, 1] - Rm[1, 2], Rm[0, 2] - Rm[2, 0], Rm[1, 0] - Rm[0, 1]])
     if th < 1e-6:
         return 0.5 * v
-    if th > math.pi - 1e-4:                         
+    if th > math.pi - 1e-4:                         # near 180 deg: robust fallback
         w, V = np.linalg.eigh((Rm + Rm.T) / 2)
         axis = V[:, np.argmax(w)]
         return th * axis
