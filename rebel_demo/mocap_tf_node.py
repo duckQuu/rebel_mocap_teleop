@@ -1,17 +1,3 @@
-"""mocap_tf node - turns mocap4r2 /rigid_bodies into TF frames (the teleop node reads TF).
-
-The mocap4r2 OptiTrack driver publishes mocap4r2_msgs/RigidBodies on /rigid_bodies but no TF.
-For every rigid body this broadcasts   <header.frame_id>  ->  <prefix><rigid_body_name>
-e.g.  map -> rigid_body_1   for the Motive rigid body with streaming ID 1.
-
-Parameters
-  topic [/rigid_bodies]     input topic
-  prefix [rigid_body_]      child frame = prefix + rigid_body_name
-  parent_frame ['']         override the parent frame ('' = use the message header.frame_id)
-  use_receive_time [true]   stamp with this PC's clock (avoids clock offsets between machines)
-
-Needs the mocap4r2_msgs package (source ~/mocap_ws/install/setup.bash first).
-"""
 import rclpy
 from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
