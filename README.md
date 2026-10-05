@@ -23,7 +23,9 @@ rebel_demo/
 ```
 
 ## Requirements
-- Ubuntu 24.04 + ROS 2 Jazzy on the PC that runs the mocap driver (the NatNet library is Linux-only).
+- Linux PC that runs the mocap driver (the NatNet library is Linux-only), with **one** ROS 2 distribution:
+  Ubuntu 22.04 + Humble, or Ubuntu 24.04 + Jazzy. The code is plain rclpy and works on both.
+  Below, replace `<distro>` with `humble` or `jazzy`. Never mix the two (in terminals, workspaces or Isaac Sim).
 - Python: numpy (no other packages).
 - RViz can run on the same Linux PC (needs a screen) or on another machine (e.g. a Mac with RoboStack)
   that has this package built, same network, same `ROS_DOMAIN_ID`.
@@ -53,17 +55,47 @@ network, **Transmission Type** = same as the YAML, **Rigid Bodies** on. The hand
 becomes the TF frame `rigid_body_<ID>`. Windows firewall: network profile Private, allow Motive.
 
 ## 3. Build this package
+Get the code into the workspace `src` folder (clone it as `rebel_demo`):
 ```bash
-mkdir -p ~/rebel_ws/src && cd ~/rebel_ws/src   # put the rebel_demo folder here
-cd ~/rebel_ws && colcon build --symlink-install
+mkdir -p ~/rebel_ws/src
+cd ~/rebel_ws/src
+git clone https://github.com/duckQuu/rebel_mocap_teleop.git rebel_demo
 ```
-`~/.bashrc` (every terminal):
+Build **from the workspace root** `~/rebel_ws` — never from `src/` or `src/rebel_demo/`:
 ```bash
-export ROS_DOMAIN_ID=42            # pick a number nobody else on your network uses
-source /opt/ros/jazzy/setup.bash
+cd ~/rebel_ws
+source /opt/ros/<distro>/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install
+source install/setup.bash
+```
+Check the layout. `build`, `install`, `log` must sit next to `src`, not inside it, and the package needs every folder:
+```
+~/rebel_ws/
+  build/  install/  log/          <- created by colcon build (run in ~/rebel_ws)
+  src/
+    rebel_demo/
+      launch/  meshes/  rebel_demo/  resource/  rviz/  test/  urdf/
+      package.xml  README.md  setup.cfg  setup.py
+```
+Built in the wrong folder by mistake? Delete the stray output and rebuild from the root:
+```bash
+rm -rf ~/rebel_ws/src/build ~/rebel_ws/src/install ~/rebel_ws/src/log
+cd ~/rebel_ws && rm -rf build install log && colcon build --symlink-install
+```
+When to rebuild: with `--symlink-install`, edits to existing `.py` files apply on the next launch. Rebuild after
+adding or renaming files, or changing `setup.py`, `package.xml`, the URDF, meshes or launch files.
+
+`~/.bashrc` (every terminal must have the **same** values — and the terminal that starts Isaac Sim too):
+```bash
+source /opt/ros/<distro>/setup.bash
 source ~/mocap_ws/install/setup.bash
 source ~/rebel_ws/install/setup.bash
+export ROS_DOMAIN_ID=42                         # pick a number nobody else on your network uses
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp    # or leave unset everywhere (Fast DDS) - but the same everywhere
 ```
+(`sudo apt install ros-<distro>-rmw-cyclonedds-cpp` for Cyclone DDS.) After changing any of these, restart every
+ROS program (driver, teleop, Isaac Sim) and run `ros2 daemon stop`: running programs keep their old values.
 
 ## 4. Run
 ```bash
@@ -114,6 +146,9 @@ Up Axis to Z-up, or relaunch with `robot_ypr:="0 0 1.5708"` (or `-1.5708`).
 | `message type 'mocap4r2_msgs/msg/RigidBodies' is invalid` | `source ~/mocap_ws/install/setup.bash` |
 | RViz `could not connect to display` | started over SSH: use `rviz:=false`, run RViz on a machine with a screen |
 | RViz loads someone else's robot | another project uses the same `ROS_DOMAIN_ID`: pick another number everywhere |
+| `ros2 service call` hangs on `waiting for service`, or prints `sequence size exceeds remaining buffer` | this terminal is on a different ROS setup than teleop (distro, `RMW_IMPLEMENTATION` or `ROS_DOMAIN_ID`). Compare with the running teleop: `tr '\0' '\n' < /proc/$(pgrep -n -f rebel_demo/teleop)/environ \| grep -E '^(ROS_\|RMW_)'`, set the same values, then `ros2 daemon stop` |
+| `colcon build` makes `build/ install/ log/` inside `src/` | you ran it in the wrong folder: delete them, `cd ~/rebel_ws`, build again |
+| robot has no 3D shapes in RViz / Isaac import misses meshes | `src/rebel_demo/meshes/` is missing: re-clone the repository (section 3) |
 | robot does not move after engage | `ros2 run tf2_ros tf2_echo base_link rigid_body_1` must change as you move; check `hand_frame` |
 
 ## Next: Isaac Sim
