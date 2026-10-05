@@ -7,7 +7,7 @@ Pipeline, every cycle (default 60 Hz):
   4. clutch + mapping: relative (default) or absolute, scale, workspace clamp
   5. real-time IK  target flange pose -> 6 joint angles, seeded with the last command
   6. joint speed limit                            (max_joint_speed_deg per joint)
-  7. publish sensor_msgs/JointState on command_topic (/joint_command for Isaac Sim)
+  7. publish sensor_msgs/JointState on command_topic (/isaac_joint_commands for Isaac Sim)
 
 Clutch (relative mode): call the service  ~/engage  (std_srvs/SetBool)
   ros2 service call /rebel_teleop/engage std_srvs/srv/SetBool "{data: true}"    # start following
@@ -21,7 +21,7 @@ Parameters (defaults in brackets)
   cutoff_hz [4.0]         low-pass cutoff for the hand pose
   max_joint_speed_deg [45]  stale_timeout [0.2]      s without a new pose -> hold
   workspace_min [-0.7,-0.7,-0.3]  workspace_max [0.7,0.7,0.8]   target clamp in base_frame [m]
-  command_topic [/joint_command]
+  command_topic [/isaac_joint_commands]   topic Isaac Sim's ROS2 Subscribe Joint State node listens to
   publish_joint_states [false]   true = also publish /joint_states (RViz-only testing, no Isaac)
   feedback_from_joint_states [false]  true = seed IK from Isaac's /joint_states instead of last command
 """
@@ -105,7 +105,7 @@ class Teleop(Node):
         self.ws_min = np.array(d("workspace_min", [-0.7, -0.7, -0.3]).value, float)
         self.ws_max = np.array(d("workspace_max", [0.7, 0.7, 0.8]).value, float)
         self.engaged = bool(d("start_engaged", self.mode == "absolute").value)
-        topic = d("command_topic", "/joint_command").value
+        topic = d("command_topic", "/isaac_joint_commands").value
         self.pub_js = bool(d("publish_joint_states", False).value)
         self.use_feedback = bool(d("feedback_from_joint_states", False).value)
 

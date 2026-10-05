@@ -1,4 +1,4 @@
-# Hand teleoperation: OptiTrack rigid body (mocap4ros2_optitrack TF) -> IK -> /joint_command.
+# Hand teleoperation: OptiTrack rigid body (mocap4ros2_optitrack TF) -> IK -> /isaac_joint_commands.
 #
 # Start mocap4ros2_optitrack first (and activate it), then:
 #   ros2 launch rebel_demo teleop.launch.py target:=rviz      # RViz only, no Isaac (safe first test)
@@ -38,7 +38,7 @@ def setup(context):
                  "orientation": a("orientation").lower() == "true",
                  "cutoff_hz": float(a("cutoff_hz")),
                  "max_joint_speed_deg": float(a("max_joint_speed_deg")),
-                 "command_topic": "/joint_command",
+                 "command_topic": a("command_topic"),
                  "publish_joint_states": rviz_only,           # Isaac publishes /joint_states itself
              }]),
     ]
@@ -66,5 +66,7 @@ def generate_launch_description():
         D("cutoff_hz", default_value="4.0", description="low-pass cutoff on the hand pose"),
         D("max_joint_speed_deg", default_value="45.0"),
         D("rviz", default_value="true"),
+        D("command_topic", default_value="/isaac_joint_commands",
+          description="topic Isaac Sim's ROS2 Subscribe Joint State node listens to"),
         OpaqueFunction(function=setup),
     ])

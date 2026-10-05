@@ -2,13 +2,13 @@
 
 Your hand (an OptiTrack rigid body) drives a simulated igus ReBeL 6-DoF in real time.
 The hand pose is filtered, converted to joint angles with IK at 60 Hz, and published as
-`sensor_msgs/JointState` — shown in RViz now, and ready for Isaac Sim (`/joint_command`).
+`sensor_msgs/JointState` — shown in RViz now, and ready for Isaac Sim (`/isaac_joint_commands`).
 
 ```
 Motive (Windows) --NatNet--> mocap4r2 OptiTrack driver --/rigid_bodies-->
   mocap_tf --TF map->rigid_body_1--> teleop (filter -> IK -> speed limit)
   --> /joint_states  -> robot_state_publisher -> RViz
-  --> /joint_command -> Isaac Sim (next step)
+  --> /isaac_joint_commands -> Isaac Sim
 ```
 
 ## Contents
@@ -104,12 +104,15 @@ ros2 launch mocap4r2_optitrack_driver optitrack2.launch.py
 # terminal 2: activate, check data (~120 Hz)
 ros2 lifecycle set /mocap4r2_optitrack_driver_node activate
 ros2 topic hz /rigid_bodies
-# terminal 3: teleop + robot model + RViz   (add rviz:=false over SSH, then run RViz elsewhere)
+# terminal 3, RViz only: teleop + robot model + RViz   (add rviz:=false over SSH, then run RViz elsewhere)
 ros2 launch rebel_demo teleop.launch.py target:=rviz hand_frame:=rigid_body_1 scale:=0.5
+# terminal 3, Isaac Sim instead (Isaac playing, its graph subscribed to /isaac_joint_commands):
+ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 rviz:=false scale:=1.0 cutoff_hz:=6.0
 # terminal 2: engage the clutch, move your hand slowly
 ros2 service call /rebel_teleop/engage std_srvs/srv/SetBool "{data: true}"
 ```
 `{data: false}` releases the clutch: the robot holds, reposition your hand, engage again.
+Check the commands: `ros2 topic echo /isaac_joint_commands` (Isaac mode) or `ros2 topic echo /joint_states` (RViz mode).
 RViz on another machine: `rviz2 -d $(ros2 pkg prefix rebel_demo)/share/rebel_demo/rviz/rebel_demo.rviz`
 
 ## How teleop works (every cycle, 60 Hz)
@@ -119,7 +122,7 @@ RViz on another machine: `rviz2 -d $(ros2 pkg prefix rebel_demo)/share/rebel_dem
 4. Clutch mapping: target = robot pose at engage + scale x (hand now - hand at engage); clamped to a workspace box.
 5. IK (damped least squares, warm-started from the last command; position only unless `orientation:=true`).
 6. Per-joint speed limit (default 45 deg/s, the real ReBeL maximum).
-7. Publish `sensor_msgs/JointState` (`joint1..joint6`, radians) on `/joint_command`, and on `/joint_states` when `target:=rviz`.
+7. Publish `sensor_msgs/JointState` (`joint1..joint6`, radians) on `command_topic` (default `/isaac_joint_commands`), and on `/joint_states` when `target:=rviz`.
 
 ## Launch arguments
 | argument | default | meaning |
@@ -134,6 +137,7 @@ RViz on another machine: `rviz2 -d $(ros2 pkg prefix rebel_demo)/share/rebel_dem
 | robot_xyz / robot_ypr | 0 0 0 | robot base pose in the mocap `map` frame (m, rad) |
 | mocap_bridge | true | start the `mocap_tf` converter |
 | rviz | true | start RViz here (needs a display) |
+| command_topic | /isaac_joint_commands | topic the joint commands go to; must match Isaac's ROS2 Subscribe Joint State node exactly (RViz always uses `/joint_states`) |
 
 Hand up must move the robot up. If it moves sideways the mocap frame is Y-up: set Motive streaming
 Up Axis to Z-up, or relaunch with `robot_ypr:="0 0 1.5708"` (or `-1.5708`).
@@ -153,8 +157,12 @@ Up Axis to Z-up, or relaunch with `robot_ypr:="0 0 1.5708"` (or `-1.5708`).
 
 ## Next: Isaac Sim
 Import `urdf/igus_rebel_6dof.urdf` (position joint drives), enable `isaacsim.ros2.bridge`, Action Graph:
-On Playback Tick -> ROS2 Subscribe Joint State (`/joint_command`) -> Articulation Controller, plus ROS2 Publish
-Joint State (`/joint_states`). Then `ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1`.
+On Playback Tick -> ROS2 Subscribe Joint State (`/isaac_joint_commands`) -> Articulation Controller, plus ROS2 Publish
+Joint State (`/joint_states`). Then (Isaac playing):
+```bash
+ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 rviz:=false scale:=1.0 cutoff_hz:=6.0
+```
+Isaac graph subscribed to another name? Add `command_topic:=/that_name` (exact spelling, case-sensitive).
 
 ## Licence and credits
 - URDF and meshes: [CommonplaceRobotics/iRC_ROS](https://github.com/CommonplaceRobotics/iRC_ROS), Apache-2.0
