@@ -10,21 +10,34 @@ JOINT_COLORS = [(0.90, 0.10, 0.10), (1.00, 0.55, 0.00), (0.95, 0.85, 0.10),
                 (0.20, 0.80, 0.20), (0.10, 0.60, 1.00), (0.70, 0.30, 1.00)]
 
 # (origin xyz [m], origin rpy [rad], axis, lower [rad], upper [rad])
+
+# for rviz
+# JOINTS = [
+#     ((0, 0, 0.100), (0, 0, 0), (0, 0, -1), -math.pi * 179 / 180, math.pi * 179 / 180),
+#     ((0, 0, 0.149), (0, math.pi / 6, 0), (0, 1, 0), -math.pi * 11 / 18, math.pi * 11 / 18),
+#     ((0, 0, 0.2384), (0, math.pi / 6, 0), (0, 1, 0), -math.pi * 11 / 18, math.pi * 11 / 18),
+#     ((0, 0, 0.149 - 0.03), (0, 0, 0), (0, 0, 1), -math.pi * 179 / 180, math.pi * 179 / 180),
+#     ((0, 0, 0.14 + 0.03), (0, -math.pi / 24, 0), (0, 1, 0),
+#      -math.pi * 19 / 36 + math.pi / 24, math.pi * 19 / 36 + math.pi / 24),
+#     ((0, 0, 0.1208), (0, 0, 0), (0, 0, 1), -math.pi * 179 / 180, math.pi * 179 / 180),
+# ]
+
+# for isaac
 JOINTS = [
-    ((0, 0, 0.100), (0, 0, 0), (0, 0, -1), -math.pi * 179 / 180, math.pi * 179 / 180),
-    ((0, 0, 0.149), (0, math.pi / 6, 0), (0, 1, 0), -math.pi * 11 / 18, math.pi * 11 / 18),
-    ((0, 0, 0.2384), (0, math.pi / 6, 0), (0, 1, 0), -math.pi * 11 / 18, math.pi * 11 / 18),
-    ((0, 0, 0.149 - 0.03), (0, 0, 0), (0, 0, 1), -math.pi * 179 / 180, math.pi * 179 / 180),
-    ((0, 0, 0.14 + 0.03), (0, -math.pi / 24, 0), (0, 1, 0),
-     -math.pi * 19 / 36 + math.pi / 24, math.pi * 19 / 36 + math.pi / 24),
-    ((0, 0, 0.1208), (0, 0, 0), (0, 0, 1), -math.pi * 179 / 180, math.pi * 179 / 180),
+    ((0, 0, 0.1462),     (0, 0, math.pi), (0, 0, 1),  -3.1241,  3.1241),   # joint1
+    ((0, 0.0265, 0.106),  (0, 0, 0),       (0, -1, 0), -1.4835,  2.4435),  # joint2
+    ((0, -0.0265, 0.24152), (0, 0, 0),     (0, -1, 0), -1.39626, 2.61799), # joint3
+    ((0.001345, 0, 0.157479), (0, 0, 0),   (0, 0, 1),  -3.12414, 3.12414), # joint4
+    ((0, 0, 0.142),       (0, 0, 0),       (0, -1, 0), -1.65806, 1.65806), # joint5
+    ((0, 0, 0.0768),      (0, 0, 0),       (0, 0, 1),  -3.12414, 3.12414), # joint6
 ]
+
 LOWER = np.array([j[3] for j in JOINTS])
 UPPER = np.array([j[4] for j in JOINTS])
 VMAX = math.radians(45.0)                       # rad/s, every joint (URDF velocity limit)
 
-HOME = np.radians([0.0, 20.0, 60.0, 0.0, 60.0, 0.0])        # "ready" pose, flange in front, pointing down
-STRAIGHT_UP = np.radians([0.0, -30.0, -30.0, 0.0, 7.5, 0.0])  # URDF has built-in 30/30/-7.5 deg offsets
+HOME = np.radians([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])        # "ready" pose, flange in front, pointing down
+# STRAIGHT_UP = np.radians([0.0, -30.0, -30.0, 0.0, 7.5, 0.0])  # URDF has built-in 30/30/-7.5 deg offsets
 
 
 def rot(axis, a):
@@ -39,8 +52,8 @@ def rpy(r, p, y):
     return rot((0, 0, 1), y) @ rot((0, 1, 0), p) @ rot((1, 0, 0), r)
 
 
-_FLANGE_R = rpy(0, -math.pi / 2, 0)            # link_8 -> flange (tool0): x axis points out of the flange
-_FLANGE_P = np.array([0, 0, 0.0012])
+_FLANGE_R = rpy(0, 0, math.pi)            # link_8 -> flange (tool0): x axis points out of the flange
+_FLANGE_P = np.array([0, 0, 0.0527])
 
 
 def quat_to_matrix(q):
