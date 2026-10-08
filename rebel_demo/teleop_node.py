@@ -23,7 +23,9 @@ Parameters (defaults in brackets)
   workspace_min [-0.7,-0.7,-0.3]  workspace_max [0.7,0.7,0.8]   target clamp in base_frame [m]
   command_topic [/isaac_joint_commands]   topic Isaac Sim's ROS2 Subscribe Joint State node listens to
   publish_joint_states [false]   true = also publish /joint_states (RViz-only testing, no Isaac)
-  feedback_from_joint_states [false]  true = seed IK from Isaac's /joint_states instead of last command
+  feedback_from_joint_states [false]  true = seed IK from Isaac's joint states instead of last command
+  joint_prefix ['']       joint names = prefix + joint1..joint6 (arm_left_ / arm_right_ for the dual-arm rig)
+  joint_states_topic [/joint_states]   where Isaac publishes the measured joints (feedback only)
 """
 import math
 
@@ -108,6 +110,9 @@ class Teleop(Node):
         topic = d("command_topic", "/isaac_joint_commands").value
         self.pub_js = bool(d("publish_joint_states", False).value)
         self.use_feedback = bool(d("feedback_from_joint_states", False).value)
+        prefix = d("joint_prefix", "").value
+        self.joint_names = [prefix + n for n in JOINT_NAMES]
+        js_topic = d("joint_states_topic", "/joint_states").value
 
         self.tf = Buffer()
         self.tf_listener = TransformListener(self.tf, self)
@@ -115,7 +120,7 @@ class Teleop(Node):
         self.pub_state = self.create_publisher(JointState, "/joint_states", 10) if self.pub_js else None
         self.pub_target = self.create_publisher(PoseStamped, "~/target", 10)
         if self.use_feedback and not self.pub_js:
-            self.create_subscription(JointState, "/joint_states", self.on_js, 10)
+            self.create_subscription(JointState, js_topic, self.on_js, 10)
         self.create_service(SetBool, "~/engage", self.on_engage)
 
         self.q_cmd = HOME.copy()           # last commanded joints (the robot starts at HOME)
@@ -128,14 +133,14 @@ class Teleop(Node):
         self.dt = 1.0 / self.rate
         self.create_timer(self.dt, self.step)
         self.get_logger().info(
-            f"teleop: {self.hand_frame} -> {self.base_frame}, mode={self.mode}, "
+            f"teleop: {self.hand_frame} -> {self.base_frame} ({self.joint_names[0]}..), mode={self.mode}, "
             f"{'full pose' if self.use_orientation else 'position only'}, {self.rate:.0f} Hz -> {topic}"
             + ("" if self.engaged else "  (NOT engaged: call ~/engage true)"))
 
     # ------------------------------------------------------------------ inputs
     def on_js(self, msg):
-        if all(n in msg.name for n in JOINT_NAMES):
-            self.q_meas = np.array([msg.position[msg.name.index(n)] for n in JOINT_NAMES])
+        if all(n in msg.name for n in self.joint_names):
+            self.q_meas = np.array([msg.position[msg.name.index(n)] for n in self.joint_names])
 
     def on_engage(self, req, res):
         self.engaged = bool(req.data)
@@ -209,7 +214,7 @@ class Teleop(Node):
     def publish(self, q):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.name = JOINT_NAMES
+        msg.name = self.joint_names
         msg.position = [float(v) for v in q]
         self.pub_cmd.publish(msg)
         if self.pub_state is not None:

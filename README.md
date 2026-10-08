@@ -214,7 +214,9 @@ RViz on another machine: `rviz2 -d $(ros2 pkg prefix rebel_demo)/share/rebel_dem
 | gripper_threshold | 0.08 | switching distance [m] palm <-> fingertip |
 | gripper_hysteresis | 0.02 | dead band [m] around the threshold |
 | gripper_invert | false | true = far closes, near opens |
-| command_topic | /isaac_joint_commands | topic the joint commands go to; must match Isaac's ROS2 Subscribe Joint State node exactly (RViz always uses `/joint_states`) |
+| rig | (empty) | empty = single arm; `left` / `right` = that arm of the Isaac dual-arm rig (needs `target:=isaac`) |
+| rig_xacro | dual_arm_rig_v2.urdf.xacro | rig model in `igus_rebel_description/urdf` |
+| command_topic | (auto) | `/isaac_joint_commands` (single) or `/dual_arm/isaac_joint_commands` (rig); must match Isaac's ROS2 Subscribe Joint State node exactly |
 
 ## Gripper (HIWIN XEG-32)
 Two rigid bodies on the same hand: the **palm** (`rigid_body_1`, moves the arm) and a **fingertip** (`rigid_body_2`,
@@ -288,6 +290,49 @@ ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 r
   scale:=1.0 cutoff_hz:=6.0 gripper:=false lock_gripper:=true
 ```
 Isaac graph subscribed to another name? Add `command_topic:=/that_name` (exact spelling, case-sensitive).
+
+### Dual-arm rig: move one arm
+For the dual-arm rig (`dual_arm_rig.usda` / `dual_arm_rig_v2.usda`), run the rig's three scripts in Isaac's Script
+Editor (timeline **stopped**, stage loaded), then press Play. Adjust `path_base` to where the scripts are:
+```python
+scripts = ["dual_arm_rig_ros2_bridge.py", "sim_flap_weld.py", "sim_scene_control.py"]
+path_base = "/home/user1/Documents/compal_dual_arm/compal_robot/compal_robot/src/igus_rebel_description/urdf/igus_stand_dual_arm/"
+for script in scripts:
+    with open(path_base + script) as f:
+        exec(f.read())
+```
+Then teleop **one** arm (`rig:=left` or `rig:=right`); the other arm holds its pose:
+```bash
+ros2 launch rebel_demo teleop.launch.py target:=isaac rig:=left hand_frame:=rigid_body_1 rviz:=false \
+  scale:=1.0 cutoff_hz:=6.0
+```
+`rig:=left` sets everything for that arm:
+
+| | single arm (default) | `rig:=left` |
+|---|---|---|
+| joint names | `joint1..joint6` | `arm_left_joint1..arm_left_joint6` |
+| command topic | `/isaac_joint_commands` | `/dual_arm/isaac_joint_commands` |
+| joint states (RViz, feedback) | `/joint_states` | `/dual_arm/isaac_joint_states` |
+| IK base frame | `base_link` | `arm_left_base_link` |
+| gripper joints | `xeg32_left/right_carriage_joint` | `arm_left_xeg32_left/right_carriage_joint` |
+| RViz model | `urdf/rebel_xeg32.urdf.xacro` | `igus_rebel_description/urdf/<rig_xacro>` (whole rig) |
+
+- `rig_xacro:=dual_arm_rig.urdf.xacro` if Isaac runs the v1 rig (default `dual_arm_rig_v2.urdf.xacro`).
+- The rig needs `target:=isaac`: Isaac publishes the joint states of the whole rig (lift, sliders, both arms).
+- Do not run the rig's own `robot_state_publisher` (e.g. `dual_arm_rig_isaac.launch.py`) at the same time: two
+  robot descriptions publish conflicting TF.
+- `robot_xyz` / `robot_ypr` place the rig's `world` in the mocap frame; only the rotation matters in relative mode.
+- Gripper: the rig's XEG joints are unlocked, so `gripper:=true` (default) drives that arm's jaws. If Isaac reports
+  errors for `..._right_carriage_joint` (mimic joint), use `gripper:=false`.
+
+Record with the rig (left arm, wrist + top cameras):
+```bash
+ros2 run rebel_demo recorder --ros-args -p joint_prefix:=arm_left_ \
+  -p joint_states_topic:=/dual_arm/isaac_joint_states -p command_topic:=/dual_arm/isaac_joint_commands \
+  -p gripper_joint:=arm_left_xeg32_left_carriage_joint \
+  -p cameras:="wrist:/dual_arm/wrist_left/rgb/image_raw,top:/dual_arm/gemini336L/rgb/image_raw" \
+  -p image_size:="[320,240]"
+```
 
 What goes to Isaac: `sensor_msgs/JointState` on `/isaac_joint_commands`, names `joint1`..`joint6`, radians, 60 Hz;
 Isaac publishes the measured state back on `/joint_states`.

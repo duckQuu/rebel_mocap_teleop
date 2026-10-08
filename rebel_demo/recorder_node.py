@@ -17,6 +17,8 @@ Parameters (defaults in brackets)
   joint_states_topic [/joint_states]   command_topic [/isaac_joint_commands]
   gripper_state_topic [/rebel_gripper/state]   max_age [0.5]
   gripper_joint [xeg32_left_carriage_joint]  closed_pos / open_pos   (measured gripper -> 0..1)
+  joint_prefix ['']   arm joints = prefix + joint1..joint6 (arm_left_ / arm_right_ for the dual-arm rig);
+                      the dataset always names them joint1..joint6
   task ['']
 Needs pyarrow (pip install pyarrow) and ffmpeg (sudo apt install ffmpeg).
 """
@@ -62,6 +64,8 @@ class Recorder(Node):
         self.closed = float(d("closed_pos", CLOSED_POS).value)
         self.open = float(d("open_pos", OPEN_POS).value)
         self.max_age = float(d("max_age", 0.5).value)
+        prefix = d("joint_prefix", "").value
+        self.joint_names = [prefix + n for n in JOINT_NAMES]
         d("task", "")
 
         self.cameras = [n.strip() for n, _ in cams]
@@ -99,16 +103,16 @@ class Recorder(Node):
         self.stamp[name] = self.now()
 
     def on_js(self, msg):
-        if all(n in msg.name for n in JOINT_NAMES):
-            self.q_meas = [msg.position[msg.name.index(n)] for n in JOINT_NAMES]
+        if all(n in msg.name for n in self.joint_names):
+            self.q_meas = [msg.position[msg.name.index(n)] for n in self.joint_names]
             self.stamp["state"] = self.now()
         if self.grip_joint in msg.name:
             pos = msg.position[msg.name.index(self.grip_joint)]
             self.grip_meas = (pos - self.closed) / (self.open - self.closed)
 
     def on_cmd(self, msg):                                  # arm and gripper commands arrive as separate messages
-        if all(n in msg.name for n in JOINT_NAMES):
-            self.q_cmd = [msg.position[msg.name.index(n)] for n in JOINT_NAMES]
+        if all(n in msg.name for n in self.joint_names):
+            self.q_cmd = [msg.position[msg.name.index(n)] for n in self.joint_names]
             self.stamp["action"] = self.now()
 
     def on_grip(self, msg):
