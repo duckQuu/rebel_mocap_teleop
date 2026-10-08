@@ -77,8 +77,19 @@ cd ~/mocap_ws && colcon build --symlink-install
 
 ## 2. Motive (Windows)
 Edit -> Settings -> Streaming: **Broadcast Frame Data** on, **Local Interface** = the Motive PC IP on the shared
-network, **Transmission Type** = same as the YAML, **Rigid Bodies** on. The hand rigid body's **Streaming ID**
-becomes the TF frame `rigid_body_<ID>`. Windows firewall: network profile Private, allow Motive.
+network, **Transmission Type** = same as the YAML, **Rigid Bodies** on. Windows firewall: network profile Private,
+allow Motive.
+
+Rigid bodies: each one's **Streaming ID** (Properties -> Streaming ID) becomes the TF frame `rigid_body_<ID>`;
+the name you give it in Motive does not matter. Defaults used by the launch file:
+
+| rigid body | Streaming ID | TF frame | launch argument |
+|---|---|---|---|
+| palm (moves the arm) | 1 | `rigid_body_1` | `hand_frame` |
+| fingertip (opens / closes the gripper) | 2 | `rigid_body_2` | `gripper_frame` |
+
+Other IDs: pass them, e.g. `hand_frame:=rigid_body_5 gripper_frame:=rigid_body_6`. The `mocap_tf` log prints
+`new rigid body: map -> rigid_body_<ID>` for every rigid body it receives.
 
 ## 3. Build this package
 Get the code into the workspace `src` folder (clone it as `rebel_demo`):
