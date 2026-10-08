@@ -16,7 +16,7 @@ Pipeline, every cycle (default 60 Hz):
 
 Parameters (defaults in brackets)
   gripper_frame [rigid_body_2]   ref_frame [rigid_body_1]
-  threshold [0.06]  hysteresis [0.01]   switching distance and dead band [m]
+  threshold [0.08]  hysteresis [0.02]   switching distance and dead band [m]
   invert [false]           true = far closes, near opens
   joint_prefix [xeg32_]    arm_left_xeg32_ / arm_right_xeg32_ for the dual-arm rig
   closed_pos [-0.0116631]  open_pos [0.00483688]   carriage joint values [m] (xeg32_gripper.urdf.xacro limits)
@@ -56,8 +56,8 @@ class Gripper(Node):
         d = self.declare_parameter
         self.gripper_frame = d("gripper_frame", "rigid_body_2").value
         self.ref_frame = d("ref_frame", "rigid_body_1").value
-        self.threshold = float(d("threshold", 0.06).value)
-        self.hysteresis = float(d("hysteresis", 0.01).value)
+        self.threshold = float(d("threshold", 0.08).value)
+        self.hysteresis = float(d("hysteresis", 0.02).value)
         self.invert = bool(d("invert", False).value)
         prefix = d("joint_prefix", "xeg32_").value
         self.joints = [prefix + j for j in CARRIAGE_JOINTS]

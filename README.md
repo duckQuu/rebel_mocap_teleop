@@ -42,7 +42,8 @@ Joint limits follow the igus spec sheet as in the arm macro (joint2 lower -80 de
 ## Requirements
 - Linux PC that runs the mocap driver (the NatNet library is Linux-only), with **one** ROS 2 distribution:
   Ubuntu 22.04 + Humble, or Ubuntu 24.04 + Jazzy. The code is plain rclpy and works on both.
-  Below, replace `<distro>` with `humble` or `jazzy`. Never mix the two (in terminals, workspaces or Isaac Sim).
+  The commands below detect it with `$(ls /opt/ros)` (works when exactly one distribution is installed).
+  Never mix two distributions (in terminals, workspaces or Isaac Sim).
 - Python: numpy. The recorder also needs `pyarrow` (`pip install pyarrow`) and the `ffmpeg` binary.
 - ROS packages: `xacro`, `robot_state_publisher`, `rviz2`, and `igus_rebel_description` (section 3).
 - RViz can run on the same Linux PC (needs a screen) or on another machine (e.g. a Mac with RoboStack)
@@ -50,7 +51,9 @@ Joint limits follow the igus spec sheet as in the arm macro (joint2 lower -80 de
 
 ## 1. Mocap driver (separate workspace)
 ```bash
-sudo apt install python3-rosdep python3-vcstool
+source /opt/ros/$(ls /opt/ros)/setup.bash
+sudo apt install -y python3-rosdep python3-vcstool
+sudo rosdep init 2>/dev/null; rosdep update
 mkdir -p ~/mocap_ws/src && cd ~/mocap_ws/src
 git clone -b rolling https://github.com/MOCAP4ROS2-Project/mocap4ros2_optitrack.git
 vcs import < mocap4ros2_optitrack/dependency_repos.repos
@@ -59,13 +62,18 @@ colcon build --symlink-install
 ```
 Do not use the `OptiTrack/mocap4ros2_optitrack` fork: its dependency file points to a repository that does not exist.
 
-Edit `~/mocap_ws/src/mocap4ros2_optitrack/mocap4r2_optitrack_driver/config/mocap4r2_optitrack_driver_params.yaml`:
-```yaml
-connection_type: "Multicast"        # must match Motive (Multicast or Unicast)
-server_address: "<Motive PC IP>"    # the computer that SENDS
-local_address: "<this Linux PC IP>" # the computer that RECEIVES
-multicast_address: "239.255.42.99"
+Set the network addresses in the driver config. Only the first line needs your value: the Motive PC IP
+(Motive: Edit -> Settings -> Streaming -> Local Interface). This PC's IP is detected automatically.
+```bash
+MOTIVE_IP=192.168.1.10                       # <- the Motive PC IP
+LOCAL_IP=$(hostname -I | awk '{print $1}')   # this Linux PC (check with: echo $LOCAL_IP)
+CFG=~/mocap_ws/src/mocap4ros2_optitrack/mocap4r2_optitrack_driver/config/mocap4r2_optitrack_driver_params.yaml
+sed -i -E "s/^( *connection_type:).*/\1 \"Multicast\"/; s/^( *server_address:).*/\1 \"$MOTIVE_IP\"/; \
+  s/^( *local_address:).*/\1 \"$LOCAL_IP\"/; s/^( *multicast_address:).*/\1 \"239.255.42.99\"/" "$CFG"
+grep -E "connection_type|server_address|local_address|multicast_address" "$CFG"
+cd ~/mocap_ws && colcon build --symlink-install
 ```
+`connection_type` must match Motive's Transmission Type (Multicast here; use Unicast in both if needed).
 
 ## 2. Motive (Windows)
 Edit -> Settings -> Streaming: **Broadcast Frame Data** on, **Local Interface** = the Motive PC IP on the shared
@@ -80,17 +88,20 @@ cd ~/rebel_ws/src
 git clone https://github.com/duckQuu/rebel_mocap_teleop.git rebel_demo
 ```
 The robot model needs the `igus_rebel_description` package (rebel2 arm + XEG-32 macros, `meshes/` and
-`meshes_low/`). It is **not in this repository** (vendor CAD): get it from the igus mesh LOD bundle and put it
-next to `rebel_demo` (or source a workspace that already builds it). colcon does not find packages nested
-inside another package, so it must sit directly in `src/`:
+`meshes_low/`). It is **not in this repository** (vendor CAD). Put the igus mesh LOD bundle folder in your home
+directory as `~/igus_mesh_lod_bundle`, then copy the package next to `rebel_demo` (colcon does not find packages
+nested inside another package, so it must sit directly in `src/`):
 ```bash
-cp -r <igus_mesh_lod_bundle>/src/igus_rebel_description ~/rebel_ws/src/
+cp -r ~/igus_mesh_lod_bundle/src/igus_rebel_description ~/rebel_ws/src/
 ```
 Build **from the workspace root** `~/rebel_ws` — never from `src/` or `src/rebel_demo/`:
 ```bash
 cd ~/rebel_ws
-source /opt/ros/<distro>/setup.bash
-rosdep install --from-paths src --ignore-src -r -y
+source /opt/ros/$(ls /opt/ros)/setup.bash
+rosdep install --from-paths src --ignore-src -r -y \
+  --skip-keys "topic_based_ros2_control gz_ros2_control ros_gz_bridge"   # igus_rebel_description extras, not needed here
+sudo apt install -y ffmpeg ros-$(ls /opt/ros)-joint-state-publisher-gui
+pip install pyarrow                                                         # recorder only
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -119,18 +130,24 @@ Without `--symlink-install`, rebuild after every edit.
   setuptools >= 80. Either build without it (`colcon build`), or `pip install "setuptools<80"` first.
 - After a failed symlink build, a plain build fails with `option --uninstall not recognized`.
   Delete the leftovers and rebuild: `rm -rf build/rebel_demo install/rebel_demo && colcon build`
-- Install xacro into the env: `conda install -c robostack-jazzy -c conda-forge ros-jazzy-xacro`
+- Install into the env: `conda install -c robostack-jazzy -c conda-forge ros-jazzy-xacro ros-jazzy-joint-state-publisher-gui ffmpeg pyarrow`
+- Workspace on this Mac: `~/Downloads/rebel_teleop_ws` (use it instead of `~/rebel_ws`).
 
-`~/.bashrc` (every terminal must have the **same** values — and the terminal that starts Isaac Sim too):
+Add the environment to `~/.bashrc` once (every terminal must have the **same** values — and the terminal that
+starts Isaac Sim too). `ROS_DOMAIN_ID=42`: pick a number nobody else on your network uses.
 ```bash
-source /opt/ros/<distro>/setup.bash
+sudo apt install -y ros-$(ls /opt/ros)-rmw-cyclonedds-cpp
+cat >> ~/.bashrc <<'BASHRC'
+source /opt/ros/$(ls /opt/ros)/setup.bash
 source ~/mocap_ws/install/setup.bash
 source ~/rebel_ws/install/setup.bash
-export ROS_DOMAIN_ID=42                         # pick a number nobody else on your network uses
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp    # or leave unset everywhere (Fast DDS) - but the same everywhere
+export ROS_DOMAIN_ID=42
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+BASHRC
+source ~/.bashrc && ros2 daemon stop
 ```
-(`sudo apt install ros-<distro>-rmw-cyclonedds-cpp` for Cyclone DDS.) After changing any of these, restart every
-ROS program (driver, teleop, Isaac Sim) and run `ros2 daemon stop`: running programs keep their old values.
+After changing any of these later, restart every ROS program (driver, teleop, Isaac Sim) and run
+`ros2 daemon stop`: running programs keep their old values.
 
 ## 4. Run
 ```bash
@@ -139,10 +156,10 @@ ros2 launch mocap4r2_optitrack_driver optitrack2.launch.py
 # terminal 2: activate, check data (~120 Hz)
 ros2 lifecycle set /mocap4r2_optitrack_driver_node activate
 ros2 topic hz /rigid_bodies
-# terminal 3, RViz only: arm + XEG gripper (hand = rigid_body_1, gripper control = rigid_body_2)
+# terminal 3, RViz only: arm + XEG gripper (palm = rigid_body_1, fingertip = rigid_body_2)
 #   (add rviz:=false over SSH, then run RViz elsewhere)
 ros2 launch rebel_demo teleop.launch.py target:=rviz hand_frame:=rigid_body_1 scale:=0.5 \
-  gripper_frame:=rigid_body_2 gripper_threshold:=0.06 gripper_hysteresis:=0.01 mesh_lod:=low
+  gripper_frame:=rigid_body_2 gripper_threshold:=0.08 gripper_hysteresis:=0.02 mesh_lod:=low
 # terminal 3, Isaac Sim instead (Isaac playing, graph subscribed to /isaac_joint_commands), gripper off:
 ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 rviz:=false \
   scale:=1.0 cutoff_hz:=6.0 gripper:=false lock_gripper:=true
@@ -150,14 +167,15 @@ ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 r
 ros2 service call /rebel_teleop/engage std_srvs/srv/SetBool "{data: true}"
 ```
 `{data: false}` releases the clutch: the robot holds, reposition your hand, engage again.
-Gripper checks (RViz run): `ros2 run tf2_ros tf2_echo rigid_body_1 rigid_body_2` while you pinch / spread, set
-`gripper_threshold` to the midpoint; `ros2 topic echo /rebel_gripper/state` shows 1 = open, 0 = closed.
+
+Hand up must move the robot up. If it moves sideways the mocap frame is Y-up: set Motive streaming
+Up Axis to Z-up, or relaunch with `robot_ypr:="0 0 1.5708"` (or `-1.5708`).
 
 RViz only, no mocap (robot at HOME, gripper open):
 ```bash
 ros2 launch rebel_demo teleop.launch.py target:=rviz mocap_bridge:=false
 ```
-Model viewer with joint sliders (instead of the launch above, not together with it):
+Model viewer with joint sliders (instead of the launch above, not together with it; one command per terminal):
 ```bash
 ros2 run robot_state_publisher robot_state_publisher --ros-args -p robot_description:="$(xacro $(ros2 pkg prefix rebel_demo)/share/rebel_demo/urdf/rebel_xeg32.urdf.xacro mesh_lod:=low)"
 ros2 run joint_state_publisher_gui joint_state_publisher_gui
@@ -193,22 +211,34 @@ RViz on another machine: `rviz2 -d $(ros2 pkg prefix rebel_demo)/share/rebel_dem
 | gripper | true | start the gripper node |
 | gripper_frame | rigid_body_2 | TF frame of the gripper-control rigid body |
 | gripper_ref_frame | (hand_frame) | distance is measured to this frame |
-| gripper_threshold | 0.06 | distance [m] below which the gripper closes |
-| gripper_hysteresis | 0.01 | dead band [m] around the threshold |
+| gripper_threshold | 0.08 | switching distance [m] palm <-> fingertip |
+| gripper_hysteresis | 0.02 | dead band [m] around the threshold |
 | gripper_invert | false | true = far closes, near opens |
 | command_topic | /isaac_joint_commands | topic the joint commands go to; must match Isaac's ROS2 Subscribe Joint State node exactly (RViz always uses `/joint_states`) |
 
 ## Gripper (HIWIN XEG-32)
-A second rigid body (`gripper_frame`, default `rigid_body_2`, e.g. on your thumb) controls the gripper. The node
-measures its distance to `gripper_ref_frame` (default: the hand body) and switches between two states:
+Two rigid bodies on the same hand: the **palm** (`rigid_body_1`, moves the arm) and a **fingertip** (`rigid_body_2`,
+Motive Streaming ID 2, controls the gripper). Finger extended = far = **open**, finger curled = near = **closed**.
+Moving or rotating the whole hand does not change their distance, so arm motion never opens or closes the gripper.
+The node measures the distance between the two rigid bodies' pivot points and switches between two states:
 ```
 distance < threshold - hysteresis/2   -> CLOSE (0)
 distance > threshold + hysteresis/2   -> OPEN  (1)
 in between, or tracking lost          -> keep the current state
 ```
 The dead band stops marker jitter at the threshold from making the gripper flicker. The jaws then move to the
-closed / open carriage position at `max_speed`. Pick the threshold from
-`ros2 run tf2_ros tf2_echo rigid_body_1 rigid_body_2`: midway between your pinched and apart distances.
+closed / open carriage position at `max_speed`. Defaults: threshold 0.08 m, hysteresis 0.02 m (closes below 7 cm,
+opens above 9 cm); typical palm -> index fingertip distances are ~10-13 cm extended and ~4-6 cm curled.
+
+Calibrate: print the distance live, hold the finger extended, then curled, and set `gripper_threshold` to the
+midpoint and `gripper_hysteresis` to about a third of the difference:
+```bash
+stdbuf -oL ros2 run tf2_ros tf2_echo rigid_body_1 rigid_body_2 2>/dev/null | awk '/Translation/ {gsub(/[\[\],]/,""); printf "%.1f cm\n", 100*sqrt($3*$3+$4*$4+$5*$5)}'
+ros2 topic echo /rebel_gripper/state     # 1 = open, 0 = closed (the launch log also prints OPEN / CLOSE + distance)
+```
+Marker tips: put the fingertip markers on the back of the finger (nail side), facing the cameras: markers on the
+pad are hidden when you curl, and when tracking is lost the gripper keeps its last state (it may then never close).
+Use clearly different marker patterns for palm and fingertip.
 Topics: `/rebel_gripper/state` (0/1), `/rebel_gripper/opening_mm`. The jaw positions are published on
 `command_topic` (and on `/joint_states` with `target:=rviz`). Node parameters: `joint_prefix` (`xeg32_`;
 `arm_left_xeg32_` for the rig), `closed_pos` / `open_pos` (carriage values [m], default = model joint limits).
@@ -230,9 +260,7 @@ videos/chunk-000/observation.images.<cam>/episode_000000.mp4
 ```
 Cameras come from Isaac Sim (ROS2 camera publishers, 8-bit encodings rgb8/bgr8/rgba8/bgra8/mono8).
 For GR00T fine-tuning, define a new-embodiment data config using `single_arm` and `gripper`.
-
-Hand up must move the robot up. If it moves sideways the mocap frame is Y-up: set Motive streaming
-Up Axis to Z-up, or relaunch with `robot_ypr:="0 0 1.5708"` (or `-1.5708`).
+The camera topics in `cameras` must match your Isaac camera publishers: list them with `ros2 topic list | grep -i rgb`.
 
 ## Troubleshooting
 | symptom | fix |
@@ -244,7 +272,7 @@ Up Axis to Z-up, or relaunch with `robot_ypr:="0 0 1.5708"` (or `-1.5708`).
 | RViz loads someone else's robot | another project uses the same `ROS_DOMAIN_ID`: pick another number everywhere |
 | `ros2 service call` hangs on `waiting for service`, or prints `sequence size exceeds remaining buffer` | this terminal is on a different ROS setup than teleop (distro, `RMW_IMPLEMENTATION` or `ROS_DOMAIN_ID`). Compare with the running teleop: `tr '\0' '\n' < /proc/$(pgrep -n -f rebel_demo/teleop)/environ \| grep -E '^(ROS_\|RMW_)'`, set the same values, then `ros2 daemon stop` |
 | `colcon build` makes `build/ install/ log/` inside `src/` | you ran it in the wrong folder: delete them, `cd ~/rebel_ws`, build again |
-| `No module named 'xacro'` at launch | install xacro (`ros-<distro>-xacro`) |
+| `No module named 'xacro'` at launch | `sudo apt install ros-$(ls /opt/ros)-xacro` |
 | `package 'igus_rebel_description' not found` | copy it into `src/` and rebuild (section 3) |
 | RViz: `No transform from link1 ... to world` for every link | the teleop node died (see its traceback): nothing publishes `/joint_states` |
 | `No package metadata was found for rebel_demo` | broken install from a failed build: `rm -rf build/rebel_demo install/rebel_demo`, rebuild |
