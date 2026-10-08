@@ -1,8 +1,9 @@
-"""igus ReBeL 6-DoF kinematics (numbers identical to urdf/igus_rebel_6dof.urdf,
-from CommonplaceRobotics/iRC_ROS irc_ros_description, rebel_version 00/01)."""
+"""igus ReBeL (rebel2) 6-DoF kinematics: numbers from igus_rebel_description's igus_rebel2_arm_macro.xacro
+(the model urdf/rebel_xeg32.urdf.xacro and the Isaac rig use). fk() / ik() work in tool0 (link6 + 52.7 mm)."""
 import math
 
 import numpy as np
+# from moveit_msgs.srv import GetPositionIK   # unused for now; needs MoveIt installed (keep kinematics numpy-only)
 
 JOINT_NAMES = [f"joint{i}" for i in range(1, 7)]
 JOINT_LABELS = ["J1 base", "J2 shoulder", "J3 elbow", "J4 forearm roll", "J5 wrist", "J6 flange roll"]
@@ -22,11 +23,11 @@ JOINT_COLORS = [(0.90, 0.10, 0.10), (1.00, 0.55, 0.00), (0.95, 0.85, 0.10),
 #     ((0, 0, 0.1208), (0, 0, 0), (0, 0, 1), -math.pi * 179 / 180, math.pi * 179 / 180),
 # ]
 
-# for isaac
+# for isaac: igus_rebel2_arm_macro.xacro (fixed motor joints merged), spec-sheet limits
 JOINTS = [
     ((0, 0, 0.1462),     (0, 0, math.pi), (0, 0, 1),  -3.1241,  3.1241),   # joint1
-    ((0, 0.0265, 0.106),  (0, 0, 0),       (0, -1, 0), -1.4835,  2.4435),  # joint2
-    ((0, -0.0265, 0.24152), (0, 0, 0),     (0, -1, 0), -1.39626, 2.61799), # joint3
+    ((0, 0.0265, 0.106),  (0, 0, 0),       (0, -1, 0), -1.396263, 2.4435),  # joint2 (lower: igus spec, -80 deg)
+    ((0, -0.0265, 0.24152), (0, 0, 0),     (0, -1, 0), -1.39626, 2.443461), # joint3 (upper: igus spec, 140 deg)
     ((0.001345, 0, 0.157479), (0, 0, 0),   (0, 0, 1),  -3.12414, 3.12414), # joint4
     ((0, 0, 0.142),       (0, 0, 0),       (0, -1, 0), -1.65806, 1.65806), # joint5
     ((0, 0, 0.0768),      (0, 0, 0),       (0, 0, 1),  -3.12414, 3.12414), # joint6
@@ -37,7 +38,6 @@ UPPER = np.array([j[4] for j in JOINTS])
 VMAX = math.radians(45.0)                       # rad/s, every joint (URDF velocity limit)
 
 HOME = np.radians([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])        # "ready" pose, flange in front, pointing down
-# STRAIGHT_UP = np.radians([0.0, -30.0, -30.0, 0.0, 7.5, 0.0])  # URDF has built-in 30/30/-7.5 deg offsets
 
 
 def rot(axis, a):

@@ -7,7 +7,12 @@
 #
 # robot_xyz / robot_ypr = where the robot base sits in the mocap "map" frame (Z-up, metres, radians).
 # This publishes the static TF  map -> world  (the URDF already has world -> base_link).
+#
+# Robot model: urdf/rebel_xeg32.urdf.xacro = igus rebel2 arm + XEG-32 from igus_rebel_description
+# (the same macros as the Isaac dual-arm rig). mesh_lod:=low|full picks the mesh detail.
 import os
+
+import xacro
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -18,9 +23,9 @@ from launch_ros.actions import Node
 
 def setup(context):
     share = get_package_share_directory("rebel_demo")
-    with open(os.path.join(share, "urdf", "igus_rebel_6dof.urdf")) as f:
-        urdf = f.read()
     a = lambda n: LaunchConfiguration(n).perform(context)  # noqa: E731
+    urdf = xacro.process_file(os.path.join(share, "urdf", "rebel_xeg32.urdf.xacro"),
+                              mappings={"mesh_lod": a("mesh_lod"), "lock_gripper": a("lock_gripper")}).toxml()
     rviz_only = a("target") == "rviz"
     x, y, z = a("robot_xyz").split()
     yaw, pitch, roll = a("robot_ypr").split()
@@ -42,6 +47,17 @@ def setup(context):
                  "publish_joint_states": rviz_only,           # Isaac publishes /joint_states itself
              }]),
     ]
+    if a("gripper").lower() == "true":          # second rigid body -> HIWIN XEG-32 jaw opening
+        nodes.append(Node(package="rebel_demo", executable="gripper", output="screen",
+                          parameters=[{
+                              "gripper_frame": a("gripper_frame"),
+                              "ref_frame": a("gripper_ref_frame") or a("hand_frame"),
+                              "threshold": float(a("gripper_threshold")),
+                              "hysteresis": float(a("gripper_hysteresis")),
+                              "invert": a("gripper_invert").lower() == "true",
+                              "command_topic": a("command_topic"),
+                              "publish_joint_states": rviz_only,
+                          }]))
     if a("mocap_bridge").lower() == "true":     # mocap4r2 driver publishes /rigid_bodies only, no TF
         nodes.append(Node(package="rebel_demo", executable="mocap_tf", output="screen"))
     if a("rviz").lower() == "true":
@@ -66,6 +82,15 @@ def generate_launch_description():
         D("cutoff_hz", default_value="4.0", description="low-pass cutoff on the hand pose"),
         D("max_joint_speed_deg", default_value="45.0"),
         D("rviz", default_value="true"),
+        D("mesh_lod", default_value="low", description="low (decimated meshes, light RViz) | full (CAD)"),
+        D("lock_gripper", default_value="false", description="true = XEG joints fixed in the model"),
+        D("gripper", default_value="true", description="control the XEG-32 with a second rigid body"),
+        D("gripper_frame", default_value="rigid_body_2", description="TF name of the gripper-control rigid body"),
+        D("gripper_ref_frame", default_value="",
+          description="opening = distance gripper_frame <-> this frame ('' = hand_frame)"),
+        D("gripper_threshold", default_value="0.06", description="distance [m] below which the gripper CLOSES"),
+        D("gripper_hysteresis", default_value="0.01", description="dead band [m] around the threshold (anti-chatter)"),
+        D("gripper_invert", default_value="false", description="true = far closes, near opens"),
         D("command_topic", default_value="/isaac_joint_commands",
           description="topic Isaac Sim's ROS2 Subscribe Joint State node listens to"),
         OpaqueFunction(function=setup),

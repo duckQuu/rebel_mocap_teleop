@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<!-- Single igus ReBeL (rebel2) + HIWIN XEG-32, built from igus_rebel_description's macros:
+     the same arm chain and gripper mount as dual_arm_rig_v2.urdf.xacro, without the rig and prefixes,
+     so the joint names are joint1..joint6 (what the teleop node publishes).
+
+     xacro args:
+       mesh_lod      low | full     meshes_low/ (decimated, for RViz) or meshes/ (full CAD)
+       lock_gripper  false | true   true = XEG joints fixed (no gripper state needed)
+-->
+<robot name="rebel_xeg32" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="mesh_lod" default="low" />
+  <xacro:arg name="lock_gripper" default="false" />
+  <xacro:property name="mesh_dir" value="${'meshes_low' if '$(arg mesh_lod)' == 'low' else 'meshes'}" />
+
+  <xacro:include filename="$(find igus_rebel_description)/urdf/igus_rebel2_arm_macro.xacro" />
+  <xacro:include filename="$(find igus_rebel_description)/urdf/xeg32_gripper.urdf.xacro" />
+
+  <link name="world" />
+
+  <xacro:igus_rebel2_arm_chain
+      mesh_dir="${mesh_dir}"
+      prefix=""
+      parent_link="world"
+      xyz="0 0 0"
+      rpy="0 0 0" />
+
+  <!-- same mount as the rig: link6 +52 mm Z, +15 deg about Z -->
+  <xacro:xeg32_gripper
+      mesh_dir="${mesh_dir}"
+      parent_link="link6"
+      prefix="xeg32_"
+      flange_xyz="0 0 0.052"
+      flange_rpy="0 0 ${pi/12}"
+      lock_joints="$(arg lock_gripper)" />
+
+  <!-- tool0 = the frame rebel_demo/kinematics.py fk() / ik() work in (z out of the flange) -->
+  <link name="tool0" />
+  <joint name="link6_to_tool0" type="fixed">
+    <parent link="link6" />
+    <child link="tool0" />
+    <origin xyz="0 0 0.0527" rpy="0 0 ${pi}" />
+  </joint>
+</robot>
