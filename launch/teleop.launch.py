@@ -18,7 +18,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
 
 
 def setup(context):
@@ -45,9 +45,13 @@ def setup(context):
         command_topic = a("command_topic") or "/isaac_joint_commands"
         js_topic = "/joint_states"
     rviz_only = a("target") == "rviz"
+    # Isaac's rig bridge stamps joint states with SIM time and publishes /clock; all nodes must use that clock,
+    # otherwise the arm TF (sim time) and the hand TF (PC time) never share a time and teleop holds at HOME.
+    sim_time = (a("use_sim_time") or ("true" if rig else "false")).lower() == "true"
     x, y, z = a("robot_xyz").split()
     yaw, pitch, roll = a("robot_ypr").split()
     nodes = [
+        SetParameter(name="use_sim_time", value=sim_time),
         Node(package="tf2_ros", executable="static_transform_publisher", name="map_to_world",
              arguments=["--x", x, "--y", y, "--z", z, "--yaw", yaw, "--pitch", pitch, "--roll", roll,
                         "--frame-id", a("mocap_frame"), "--child-frame-id", "world"]),
@@ -118,6 +122,8 @@ def generate_launch_description():
           description="'' = single arm | left | right = that arm of the Isaac dual-arm rig (needs target:=isaac)"),
         D("rig_xacro", default_value="dual_arm_rig_v2.urdf.xacro",
           description="rig model in igus_rebel_description/urdf (dual_arm_rig_v2 or dual_arm_rig)"),
+        D("use_sim_time", default_value="",
+          description="'' = auto (true with rig:=, Isaac publishes /clock) | true | false"),
         D("command_topic", default_value="",
           description="'' = /isaac_joint_commands (single) or /dual_arm/isaac_joint_commands (rig)"),
         OpaqueFunction(function=setup),

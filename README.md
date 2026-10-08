@@ -227,6 +227,7 @@ RViz on another machine: `rviz2 -d $(ros2 pkg prefix rebel_demo)/share/rebel_dem
 | gripper_invert | false | true = far closes, near opens |
 | rig | (empty) | empty = single arm; `left` / `right` = that arm of the Isaac dual-arm rig (needs `target:=isaac`) |
 | rig_xacro | dual_arm_rig_v2.urdf.xacro | rig model in `igus_rebel_description/urdf` |
+| use_sim_time | (auto) | `true` with `rig:=` (Isaac's `/clock`), else `false` |
 | command_topic | (auto) | `/isaac_joint_commands` (single) or `/dual_arm/isaac_joint_commands` (rig); must match Isaac's ROS2 Subscribe Joint State node exactly |
 
 ## Gripper (HIWIN XEG-32)
@@ -333,12 +334,16 @@ ros2 launch rebel_demo teleop.launch.py target:=isaac rig:=left hand_frame:=rigi
 - Do not run the rig's own `robot_state_publisher` (e.g. `dual_arm_rig_isaac.launch.py`) at the same time: two
   robot descriptions publish conflicting TF.
 - `robot_xyz` / `robot_ypr` place the rig's `world` in the mocap frame; only the rotation matters in relative mode.
+- Clock: the rig bridge stamps joint states with **simulation time** and publishes `/clock`, so `rig:=` turns on
+  `use_sim_time` for every node (override with `use_sim_time:=false`). Without it the arm TF (sim time) and the
+  hand TF (PC time) never share a timestamp, teleop cannot place the hand, and it keeps sending HOME (all zeros).
+  Isaac must be **playing** (the clock only runs then).
 - Gripper: the rig's XEG joints are unlocked, so `gripper:=true` (default) drives that arm's jaws. If Isaac reports
   errors for `..._right_carriage_joint` (mimic joint), use `gripper:=false`.
 
 Record with the rig (left arm, wrist + top cameras):
 ```bash
-ros2 run rebel_demo recorder --ros-args -p joint_prefix:=arm_left_ \
+ros2 run rebel_demo recorder --ros-args -p use_sim_time:=true -p joint_prefix:=arm_left_ \
   -p joint_states_topic:=/dual_arm/isaac_joint_states -p command_topic:=/dual_arm/isaac_joint_commands \
   -p gripper_joint:=arm_left_xeg32_left_carriage_joint \
   -p cameras:="wrist:/dual_arm/wrist_left/rgb/image_raw,top:/dual_arm/gemini336L/rgb/image_raw" \
