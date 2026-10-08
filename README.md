@@ -139,14 +139,19 @@ ros2 launch mocap4r2_optitrack_driver optitrack2.launch.py
 # terminal 2: activate, check data (~120 Hz)
 ros2 lifecycle set /mocap4r2_optitrack_driver_node activate
 ros2 topic hz /rigid_bodies
-# terminal 3, RViz only: teleop + robot model + RViz   (add rviz:=false over SSH, then run RViz elsewhere)
-ros2 launch rebel_demo teleop.launch.py target:=rviz hand_frame:=rigid_body_1 scale:=0.5
-# terminal 3, Isaac Sim instead (Isaac playing, its graph subscribed to /isaac_joint_commands):
-ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 rviz:=false scale:=1.0 cutoff_hz:=6.0
+# terminal 3, RViz only: arm + XEG gripper (hand = rigid_body_1, gripper control = rigid_body_2)
+#   (add rviz:=false over SSH, then run RViz elsewhere)
+ros2 launch rebel_demo teleop.launch.py target:=rviz hand_frame:=rigid_body_1 scale:=0.5 \
+  gripper_frame:=rigid_body_2 gripper_threshold:=0.06 gripper_hysteresis:=0.01 mesh_lod:=low
+# terminal 3, Isaac Sim instead (Isaac playing, graph subscribed to /isaac_joint_commands), gripper off:
+ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 rviz:=false \
+  scale:=1.0 cutoff_hz:=6.0 gripper:=false lock_gripper:=true
 # terminal 2: engage the clutch, move your hand slowly
 ros2 service call /rebel_teleop/engage std_srvs/srv/SetBool "{data: true}"
 ```
 `{data: false}` releases the clutch: the robot holds, reposition your hand, engage again.
+Gripper checks (RViz run): `ros2 run tf2_ros tf2_echo rigid_body_1 rigid_body_2` while you pinch / spread, set
+`gripper_threshold` to the midpoint; `ros2 topic echo /rebel_gripper/state` shows 1 = open, 0 = closed.
 
 RViz only, no mocap (robot at HOME, gripper open):
 ```bash
@@ -251,9 +256,19 @@ expanded with `xacro`), position joint drives, enable `isaacsim.ros2.bridge`, Ac
 On Playback Tick -> ROS2 Subscribe Joint State (`/isaac_joint_commands`) -> Articulation Controller, plus ROS2 Publish
 Joint State (`/joint_states`). Then (Isaac playing):
 ```bash
-ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 rviz:=false scale:=1.0 cutoff_hz:=6.0
+ros2 launch rebel_demo teleop.launch.py target:=isaac hand_frame:=rigid_body_1 rviz:=false \
+  scale:=1.0 cutoff_hz:=6.0 gripper:=false lock_gripper:=true
 ```
 Isaac graph subscribed to another name? Add `command_topic:=/that_name` (exact spelling, case-sensitive).
+
+What goes to Isaac: `sensor_msgs/JointState` on `/isaac_joint_commands`, names `joint1`..`joint6`, radians, 60 Hz;
+Isaac publishes the measured state back on `/joint_states`.
+- Keep `gripper:=false` until the Isaac robot has the XEG jaw joints. The gripper node publishes its jaw joints
+  (`xeg32_left_carriage_joint`, `xeg32_right_carriage_joint`) on the same topic; joint names Isaac does not know
+  cause Articulation Controller errors and can make it skip arm commands.
+- `lock_gripper:=true` makes the XEG joints fixed in the RViz model, since Isaac's `/joint_states` does not contain them.
+- The launch file builds the robot model with xacro in every mode, so `igus_rebel_description` must be built on the
+  PC that runs it (section 3).
 
 ## Licence and credits
 - Robot model: `igus_rebel_description` from the igus mesh LOD bundle, not included (rebel2 arm, XEG-32, decimated meshes).
