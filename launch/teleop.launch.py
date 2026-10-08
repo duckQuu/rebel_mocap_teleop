@@ -62,6 +62,7 @@ def setup(context):
              parameters=[{
                  "base_frame": base_frame,
                  "joint_prefix": arm,
+                 "joint_names": a("joint_names"),
                  "joint_states_topic": js_topic,
                  "hand_frame": a("hand_frame"),
                  "mode": a("mode"),
@@ -122,6 +123,8 @@ def generate_launch_description():
           description="'' = single arm | left | right = that arm of the Isaac dual-arm rig (needs target:=isaac)"),
         D("rig_xacro", default_value="dual_arm_rig_v2.urdf.xacro",
           description="rig model in igus_rebel_description/urdf (dual_arm_rig_v2 or dual_arm_rig)"),
+        D("joint_names", default_value="",
+          description="6 comma-separated arm joint names (base to wrist) sent to Isaac; '' = prefix + joint1..6"),
         D("use_sim_time", default_value="",
           description="'' = auto (true with rig:=, Isaac publishes /clock) | true | false"),
         D("command_topic", default_value="",

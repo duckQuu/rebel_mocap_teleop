@@ -25,6 +25,7 @@ Parameters (defaults in brackets)
   publish_joint_states [false]   true = also publish /joint_states (RViz-only testing, no Isaac)
   feedback_from_joint_states [false]  true = seed IK from Isaac's joint states instead of last command
   joint_prefix ['']       joint names = prefix + joint1..joint6 (arm_left_ / arm_right_ for the dual-arm rig)
+  joint_names ['']        6 comma-separated names (base to wrist), overrides joint_prefix, e.g. "a_1,a_2,...,a_6"
   joint_states_topic [/joint_states]   where Isaac publishes the measured joints (feedback only)
 """
 import math
@@ -111,7 +112,10 @@ class Teleop(Node):
         self.pub_js = bool(d("publish_joint_states", False).value)
         self.use_feedback = bool(d("feedback_from_joint_states", False).value)
         prefix = d("joint_prefix", "").value
-        self.joint_names = [prefix + n for n in JOINT_NAMES]
+        custom = [n.strip() for n in d("joint_names", "").value.split(",") if n.strip()]
+        if custom and len(custom) != 6:
+            raise ValueError(f"joint_names needs 6 comma-separated names, got {len(custom)}: {custom}")
+        self.joint_names = custom or [prefix + n for n in JOINT_NAMES]
         js_topic = d("joint_states_topic", "/joint_states").value
 
         self.tf = Buffer()

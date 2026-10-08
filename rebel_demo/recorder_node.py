@@ -19,6 +19,7 @@ Parameters (defaults in brackets)
   gripper_joint [xeg32_left_carriage_joint]  closed_pos / open_pos   (measured gripper -> 0..1)
   joint_prefix ['']   arm joints = prefix + joint1..joint6 (arm_left_ / arm_right_ for the dual-arm rig);
                       the dataset always names them joint1..joint6
+  joint_names ['']    6 comma-separated names (base to wrist), overrides joint_prefix
   task ['']
 Needs pyarrow (pip install pyarrow) and ffmpeg (sudo apt install ffmpeg).
 """
@@ -65,7 +66,10 @@ class Recorder(Node):
         self.open = float(d("open_pos", OPEN_POS).value)
         self.max_age = float(d("max_age", 0.5).value)
         prefix = d("joint_prefix", "").value
-        self.joint_names = [prefix + n for n in JOINT_NAMES]
+        custom = [n.strip() for n in d("joint_names", "").value.split(",") if n.strip()]
+        if custom and len(custom) != 6:
+            raise ValueError(f"joint_names needs 6 comma-separated names, got {len(custom)}: {custom}")
+        self.joint_names = custom or [prefix + n for n in JOINT_NAMES]
         d("task", "")
 
         self.cameras = [n.strip() for n, _ in cams]
