@@ -4,6 +4,7 @@
 #   ros2 launch rebel_demo teleop.launch.py target:=rviz      # RViz only, no Isaac (safe first test)
 #   ros2 launch rebel_demo teleop.launch.py target:=isaac     # Isaac Sim publishes /joint_states
 #   ros2 service call /rebel_teleop/engage std_srvs/srv/SetBool "{data: true}"
+#   rig:=both (dual-arm rig, two hands): /rebel_teleop_left/engage and /rebel_teleop_right/engage
 #
 # robot_xyz / robot_ypr = where the robot base sits in the mocap "map" frame (Z-up, metres, radians).
 # This publishes the static TF  map -> world  (the URDF already has world -> base_link).
@@ -25,29 +26,46 @@ def setup(context):
     share = get_package_share_directory("rebel_demo")
     a = lambda n: LaunchConfiguration(n).perform(context)  # noqa: E731
     rig = a("rig")
-    if rig:                                     # one arm of the Isaac dual-arm rig (dual_arm_rig_ros2_bridge.py)
-        if rig not in ("left", "right"):
-            raise RuntimeError(f"rig:={rig} - use rig:=left or rig:=right ('' = single arm)")
+    grip_on = a("gripper").lower() == "true"
+    if rig:                                     # Isaac dual-arm rig (dual_arm_rig_ros2_bridge.py)
+        if rig not in ("left", "right", "both"):
+            raise RuntimeError(f"rig:={rig} - use rig:=left, right or both ('' = single arm)")
         if a("target") != "isaac":
-            raise RuntimeError("rig:=left|right needs target:=isaac (Isaac publishes the rig's joint states)")
+            raise RuntimeError("rig:=left|right|both needs target:=isaac (Isaac publishes the rig's joint states)")
+        if rig == "both" and a("joint_names"):
+            raise RuntimeError("joint_names is for one arm only; rig:=both uses arm_left_/arm_right_ joint1..6")
         urdf = xacro.process_file(
             os.path.join(get_package_share_directory("igus_rebel_description"), "urdf", a("rig_xacro")),
             mappings={"mesh_lod": a("mesh_lod"), "include_ros2_control": "false",
                       "lock_gripper_joints": a("lock_gripper")}).toxml()
-        arm = f"arm_{rig}_"
-        base_frame, grip_prefix = f"{arm}base_link", f"{arm}xeg32_"
         command_topic = a("command_topic") or "/dual_arm/isaac_joint_commands"
         js_topic = "/dual_arm/isaac_joint_states"
+        sides = ["left", "right"] if rig == "both" else [rig]
+        arms = []
+        for side in sides:
+            hand = a(f"{side}_hand_frame") if rig == "both" else a("hand_frame")
+            arms.append({
+                "suffix": f"_{side}" if rig == "both" else "",     # node names: rebel_teleop_left / rebel_teleop
+                "prefix": f"arm_{side}_", "base_frame": f"arm_{side}_base_link", "grip_prefix": f"arm_{side}_xeg32_",
+                "hand": hand,
+                "finger": a(f"{side}_gripper_frame") if rig == "both" else a("gripper_frame"),
+                "ref": hand if rig == "both" else (a("gripper_ref_frame") or hand),
+            })
     else:                                       # single rebel2 + XEG-32
         urdf = xacro.process_file(os.path.join(share, "urdf", "rebel_xeg32.urdf.xacro"),
                                   mappings={"mesh_lod": a("mesh_lod"), "lock_gripper": a("lock_gripper")}).toxml()
-        arm, base_frame, grip_prefix = "", "base_link", "xeg32_"
         command_topic = a("command_topic") or "/isaac_joint_commands"
         js_topic = "/joint_states"
+        arms = [{"suffix": "", "prefix": "", "base_frame": "base_link", "grip_prefix": "xeg32_",
+                 "hand": a("hand_frame"), "finger": a("gripper_frame"),
+                 "ref": a("gripper_ref_frame") or a("hand_frame")}]
     rviz_only = a("target") == "rviz"
     # Isaac's rig bridge stamps joint states with SIM time and publishes /clock; all nodes must use that clock,
     # otherwise the arm TF (sim time) and the hand TF (PC time) never share a time and teleop holds at HOME.
     sim_time = (a("use_sim_time") or ("true" if rig else "false")).lower() == "true"
+    # Rig: every arm / gripper publishes on its own topic and joint_merger sends ONE combined message per cycle
+    # (Isaac's Subscribe Joint State keeps only the latest message, so separate messages would take turns).
+    merge = bool(rig)
     x, y, z = a("robot_xyz").split()
     yaw, pitch, roll = a("robot_ypr").split()
     nodes = [
@@ -58,34 +76,44 @@ def setup(context):
         Node(package="robot_state_publisher", executable="robot_state_publisher",
              parameters=[{"robot_description": urdf}], output="screen",
              remappings=[("joint_states", js_topic)]),
-        Node(package="rebel_demo", executable="teleop", output="screen",
-             parameters=[{
-                 "base_frame": base_frame,
-                 "joint_prefix": arm,
-                 "joint_names": a("joint_names"),
-                 "joint_states_topic": js_topic,
-                 "hand_frame": a("hand_frame"),
-                 "mode": a("mode"),
-                 "scale": float(a("scale")),
-                 "orientation": a("orientation").lower() == "true",
-                 "cutoff_hz": float(a("cutoff_hz")),
-                 "max_joint_speed_deg": float(a("max_joint_speed_deg")),
-                 "command_topic": command_topic,
-                 "publish_joint_states": rviz_only,           # Isaac publishes the joint states itself
-             }]),
     ]
-    if a("gripper").lower() == "true":          # second rigid body -> HIWIN XEG-32 jaw opening
-        nodes.append(Node(package="rebel_demo", executable="gripper", output="screen",
+    merge_inputs = []
+    for arm in arms:
+        teleop_name, grip_name = f"rebel_teleop{arm['suffix']}", f"rebel_gripper{arm['suffix']}"
+        teleop_out = f"/{teleop_name}/joint_commands" if merge else command_topic
+        grip_out = f"/{grip_name}/joint_commands" if merge else command_topic
+        nodes.append(Node(package="rebel_demo", executable="teleop", name=teleop_name, output="screen",
                           parameters=[{
-                              "gripper_frame": a("gripper_frame"),
-                              "ref_frame": a("gripper_ref_frame") or a("hand_frame"),
-                              "threshold": float(a("gripper_threshold")),
-                              "hysteresis": float(a("gripper_hysteresis")),
-                              "invert": a("gripper_invert").lower() == "true",
-                              "joint_prefix": grip_prefix,
-                              "command_topic": command_topic,
-                              "publish_joint_states": rviz_only,
+                              "base_frame": arm["base_frame"],
+                              "joint_prefix": arm["prefix"],
+                              "joint_names": a("joint_names"),
+                              "joint_states_topic": js_topic,
+                              "hand_frame": arm["hand"],
+                              "mode": a("mode"),
+                              "scale": float(a("scale")),
+                              "orientation": a("orientation").lower() == "true",
+                              "cutoff_hz": float(a("cutoff_hz")),
+                              "max_joint_speed_deg": float(a("max_joint_speed_deg")),
+                              "command_topic": teleop_out,
+                              "publish_joint_states": rviz_only,      # Isaac publishes the joint states itself
                           }]))
+        merge_inputs.append(teleop_out)
+        if grip_on:                             # fingertip rigid body -> HIWIN XEG-32 open / close
+            nodes.append(Node(package="rebel_demo", executable="gripper", name=grip_name, output="screen",
+                              parameters=[{
+                                  "gripper_frame": arm["finger"],
+                                  "ref_frame": arm["ref"],
+                                  "threshold": float(a("gripper_threshold")),
+                                  "hysteresis": float(a("gripper_hysteresis")),
+                                  "invert": a("gripper_invert").lower() == "true",
+                                  "joint_prefix": arm["grip_prefix"],
+                                  "command_topic": grip_out,
+                                  "publish_joint_states": rviz_only,
+                              }]))
+            merge_inputs.append(grip_out)
+    if merge:
+        nodes.append(Node(package="rebel_demo", executable="joint_merger", output="screen",
+                          parameters=[{"inputs": ",".join(merge_inputs), "output": command_topic}]))
     if a("mocap_bridge").lower() == "true":     # mocap4r2 driver publishes /rigid_bodies only, no TF
         nodes.append(Node(package="rebel_demo", executable="mocap_tf", output="screen"))
     if a("rviz").lower() == "true":
@@ -120,7 +148,11 @@ def generate_launch_description():
         D("gripper_hysteresis", default_value="0.02", description="dead band [m] around the threshold (anti-chatter)"),
         D("gripper_invert", default_value="false", description="true = far closes, near opens"),
         D("rig", default_value="",
-          description="'' = single arm | left | right = that arm of the Isaac dual-arm rig (needs target:=isaac)"),
+          description="'' = single arm | left | right = that arm of the Isaac rig | both (needs target:=isaac)"),
+        D("left_hand_frame", default_value="rigid_body_1", description="rig:=both: left palm rigid body"),
+        D("left_gripper_frame", default_value="rigid_body_2", description="rig:=both: left fingertip rigid body"),
+        D("right_hand_frame", default_value="rigid_body_3", description="rig:=both: right palm rigid body"),
+        D("right_gripper_frame", default_value="rigid_body_4", description="rig:=both: right fingertip rigid body"),
         D("rig_xacro", default_value="dual_arm_rig_v2.urdf.xacro",
           description="rig model in igus_rebel_description/urdf (dual_arm_rig_v2 or dual_arm_rig)"),
         D("joint_names", default_value="",

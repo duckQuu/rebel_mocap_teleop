@@ -24,6 +24,7 @@ rebel_demo/
   rebel_demo/gripper_node.py   node "gripper":  distance between two rigid bodies -> XEG-32 open (1) / closed (0)
   rebel_demo/recorder_node.py  node "recorder": joints + gripper + images -> GR00T / LeRobot v2 dataset
   rebel_demo/lerobot_writer.py dataset writer used by the recorder (parquet + H.264 mp4 + meta)
+  rebel_demo/joint_merger_node.py  node "joint_merger": all arm / gripper commands -> ONE JointState per cycle (rig)
   launch/teleop.launch.py      starts mocap_tf, teleop, gripper, robot_state_publisher, static TF, (RViz)
   urdf/rebel_xeg32.urdf.xacro  robot model: rebel2 arm + XEG-32 from igus_rebel_description (same macros as Isaac)
   rviz/                        RViz config
@@ -225,7 +226,9 @@ RViz on another machine: `rviz2 -d $(ros2 pkg prefix rebel_demo)/share/rebel_dem
 | gripper_threshold | 0.08 | switching distance [m] palm <-> fingertip |
 | gripper_hysteresis | 0.02 | dead band [m] around the threshold |
 | gripper_invert | false | true = far closes, near opens |
-| rig | (empty) | empty = single arm; `left` / `right` = that arm of the Isaac dual-arm rig (needs `target:=isaac`) |
+| rig | (empty) | empty = single arm; `left` / `right` = that arm of the Isaac dual-arm rig; `both` = both arms, two hands (needs `target:=isaac`) |
+| left_hand_frame / left_gripper_frame | rigid_body_1 / rigid_body_2 | `rig:=both`: left palm / fingertip |
+| right_hand_frame / right_gripper_frame | rigid_body_3 / rigid_body_4 | `rig:=both`: right palm / fingertip |
 | rig_xacro | dual_arm_rig_v2.urdf.xacro | rig model in `igus_rebel_description/urdf` |
 | use_sim_time | (auto) | `true` with `rig:=` (Isaac's `/clock`), else `false` |
 | joint_names | (auto) | 6 comma-separated arm joint names (base to wrist) if Isaac uses other names, e.g. `arm_left_join_1,...,arm_left_join_6`; default = `joint1..6` / `arm_<side>_joint1..6` |
@@ -346,6 +349,10 @@ ros2 launch rebel_demo teleop.launch.py target:=isaac rig:=left hand_frame:=rigi
 - Gripper: the rig's XEG joints are unlocked, so `gripper:=true` (default) drives that arm's jaws. If Isaac reports
   errors for `..._right_carriage_joint` (mimic joint), use `gripper:=false`.
 
+- In rig mode every arm and gripper publishes on its own topic (`/rebel_teleop/joint_commands`, ...) and
+  `joint_merger` sends all of them to Isaac as **one** message per cycle: Isaac's Subscribe Joint State keeps only
+  the latest message, so separate arm and gripper messages would otherwise take turns.
+
 Record with the rig (left arm, wrist + top cameras):
 ```bash
 ros2 run rebel_demo recorder --ros-args -p use_sim_time:=true -p joint_prefix:=arm_left_ \
@@ -363,6 +370,38 @@ Isaac publishes the measured state back on `/joint_states`.
 - `lock_gripper:=true` makes the XEG joints fixed in the RViz model, since Isaac's `/joint_states` does not contain them.
 - The launch file builds the robot model with xacro in every mode, so `igus_rebel_description` must be built on the
   PC that runs it (section 3).
+
+### Dual-arm rig: both arms (two hands)
+Four rigid bodies: a palm and a fingertip per hand. Defaults (change them to your Motive Streaming IDs):
+
+| | palm (moves the arm) | fingertip (gripper) |
+|---|---|---|
+| left arm | `left_hand_frame:=rigid_body_1` | `left_gripper_frame:=rigid_body_2` |
+| right arm | `right_hand_frame:=rigid_body_3` | `right_gripper_frame:=rigid_body_4` |
+
+```bash
+ros2 launch rebel_demo teleop.launch.py target:=isaac rig:=both rviz:=false scale:=1.0 cutoff_hz:=6.0 \
+  left_hand_frame:=rigid_body_1 left_gripper_frame:=rigid_body_2 \
+  right_hand_frame:=rigid_body_3 right_gripper_frame:=rigid_body_4
+# engage each arm separately (or both):
+ros2 service call /rebel_teleop_left/engage std_srvs/srv/SetBool "{data: true}"
+ros2 service call /rebel_teleop_right/engage std_srvs/srv/SetBool "{data: true}"
+```
+- Two teleop nodes (`/rebel_teleop_left`, `/rebel_teleop_right`) and two gripper nodes (`/rebel_gripper_left`,
+  `/rebel_gripper_right`; state on `/rebel_gripper_<side>/state`); each gripper measures its fingertip to its own palm.
+- All 12 arm joints and 4 jaw joints go to Isaac in one message per cycle (`joint_merger`).
+- `scale`, `mode`, `orientation`, `cutoff_hz`, `max_joint_speed_deg`, `gripper_threshold` / `gripper_hysteresis` apply
+  to both arms. `hand_frame`, `gripper_frame`, `gripper_ref_frame` and `joint_names` are for one arm only.
+
+Record both arms (14 values per frame: left arm 6 + left gripper + right arm 6 + right gripper; `modality.json`
+parts `left_arm`, `left_gripper`, `right_arm`, `right_gripper`):
+```bash
+ros2 run rebel_demo recorder --ros-args -p use_sim_time:=true -p arms:=left,right \
+  -p joint_states_topic:=/dual_arm/isaac_joint_states -p command_topic:=/dual_arm/isaac_joint_commands \
+  -p cameras:="top:/dual_arm/gemini336L/rgb/image_raw,wrist_left:/dual_arm/wrist_left/rgb/image_raw,wrist_right:/dual_arm/wrist_right/rgb/image_raw" \
+  -p image_size:="[320,240]"
+```
+Use a separate `dataset_dir` for one-arm and two-arm recordings: their state / action vectors differ.
 
 ## Licence and credits
 - Robot model: `igus_rebel_description` from the igus mesh LOD bundle, not included (rebel2 arm, XEG-32, decimated meshes).

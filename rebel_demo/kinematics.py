@@ -10,8 +10,7 @@ JOINT_LABELS = ["J1 base", "J2 shoulder", "J3 elbow", "J4 forearm roll", "J5 wri
 JOINT_COLORS = [(0.90, 0.10, 0.10), (1.00, 0.55, 0.00), (0.95, 0.85, 0.10),
                 (0.20, 0.80, 0.20), (0.10, 0.60, 1.00), (0.70, 0.30, 1.00)]
 
-# (origin xyz [m], origin rpy [rad], axis, lower [rad], upper [rad])
-
+# (origin xyz [m], origin rpy [rad], axis, lower [rad], upper [rad]
 # for rviz
 # JOINTS = [
 #     ((0, 0, 0.100), (0, 0, 0), (0, 0, -1), -math.pi * 179 / 180, math.pi * 179 / 180),

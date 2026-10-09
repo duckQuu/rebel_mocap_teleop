@@ -29,6 +29,7 @@ setup(
             "mocap_tf = rebel_demo.mocap_tf_node:main",
             "gripper = rebel_demo.gripper_node:main",
             "recorder = rebel_demo.recorder_node:main",
+            "joint_merger = rebel_demo.joint_merger_node:main",
         ],
     },
 )

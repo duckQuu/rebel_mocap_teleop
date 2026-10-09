@@ -20,6 +20,10 @@ Parameters (defaults in brackets)
   joint_prefix ['']   arm joints = prefix + joint1..joint6 (arm_left_ / arm_right_ for the dual-arm rig);
                       the dataset always names them joint1..joint6
   joint_names ['']    6 comma-separated names (base to wrist), overrides joint_prefix
+  arms ['']           '' = one arm (parameters above) | "left,right" = both arms of the dual-arm rig:
+                      joints arm_<side>_joint1..6, gripper arm_<side>_xeg32_left_carriage_joint,
+                      gripper state /rebel_gripper_<side>/state; dataset parts left_arm, left_gripper,
+                      right_arm, right_gripper (gripper_joint / joint_prefix / joint_names are ignored)
   task ['']
 Needs pyarrow (pip install pyarrow) and ffmpeg (sudo apt install ffmpeg).
 """
@@ -61,7 +65,7 @@ class Recorder(Node):
         self.fps = float(d("fps", 30.0).value)
         cams = [c.split(":", 1) for c in d("cameras", "front:/rgb").value.split(",") if c.strip()]
         w, h = (int(v) for v in d("image_size", [0, 0]).value)
-        self.grip_joint = d("gripper_joint", "xeg32_left_carriage_joint").value
+        grip_joint = d("gripper_joint", "xeg32_left_carriage_joint").value
         self.closed = float(d("closed_pos", CLOSED_POS).value)
         self.open = float(d("open_pos", OPEN_POS).value)
         self.max_age = float(d("max_age", 0.5).value)
@@ -69,25 +73,36 @@ class Recorder(Node):
         custom = [n.strip() for n in d("joint_names", "").value.split(",") if n.strip()]
         if custom and len(custom) != 6:
             raise ValueError(f"joint_names needs 6 comma-separated names, got {len(custom)}: {custom}")
-        self.joint_names = custom or [prefix + n for n in JOINT_NAMES]
+        grip_topic = d("gripper_state_topic", "/rebel_gripper/state").value
+        sides = [s.strip() for s in d("arms", "").value.split(",") if s.strip()]
         d("task", "")
 
-        self.cameras = [n.strip() for n, _ in cams]
-        self.writer = LeRobotWriter(
-            root, self.fps, self.cameras,
-            state_parts=[("single_arm", JOINT_NAMES), ("gripper", ["gripper"])],
-            action_parts=[("single_arm", JOINT_NAMES), ("gripper", ["gripper"])],
-            image_size=(w, h) if w > 0 and h > 0 else None)
+        # one entry per recorded arm: joints / gripper joint to read, dataset part names, latest values
+        if sides:
+            self.arms = [{"key": s, "joints": [f"arm_{s}_{n}" for n in JOINT_NAMES],
+                          "grip_joint": f"arm_{s}_xeg32_left_carriage_joint",
+                          "grip_topic": f"/rebel_gripper_{s}/state",
+                          "parts": (f"{s}_arm", [f"{s}_{n}" for n in JOINT_NAMES], f"{s}_gripper", [f"{s}_gripper"])}
+                         for s in sides]
+        else:
+            self.arms = [{"key": "", "joints": custom or [prefix + n for n in JOINT_NAMES], "grip_joint": grip_joint,
+                          "grip_topic": grip_topic, "parts": ("single_arm", JOINT_NAMES, "gripper", ["gripper"])}]
+        parts = [p for arm in self.arms for p in ((arm["parts"][0], arm["parts"][1]), (arm["parts"][2], arm["parts"][3]))]
+        for arm in self.arms:
+            arm.update(q_meas=None, q_cmd=None, grip_meas=None, grip_cmd=None)
 
-        self.q_meas = self.q_cmd = None
-        self.grip_meas = self.grip_cmd = None
+        self.cameras = [n.strip() for n, _ in cams]
+        self.writer = LeRobotWriter(root, self.fps, self.cameras, state_parts=parts, action_parts=parts,
+                                    image_size=(w, h) if w > 0 and h > 0 else None)
+
         self.images = {}
         self.stamp = {}                                     # input -> receive time [s]
         for name, topic in cams:
             self.create_subscription(Image, topic.strip(), lambda m, n=name.strip(): self.on_image(n, m), 2)
         self.create_subscription(JointState, d("joint_states_topic", "/joint_states").value, self.on_js, 10)
         self.create_subscription(JointState, d("command_topic", "/isaac_joint_commands").value, self.on_cmd, 10)
-        self.create_subscription(Int32, d("gripper_state_topic", "/rebel_gripper/state").value, self.on_grip, 10)
+        for arm in self.arms:
+            self.create_subscription(Int32, arm["grip_topic"], lambda m, arm=arm: self.on_grip(arm, m), 10)
         self.create_service(Trigger, "~/start", self.on_start)
         self.create_service(Trigger, "~/stop", self.on_stop)
         self.create_service(Trigger, "~/discard", self.on_discard)
@@ -107,20 +122,22 @@ class Recorder(Node):
         self.stamp[name] = self.now()
 
     def on_js(self, msg):
-        if all(n in msg.name for n in self.joint_names):
-            self.q_meas = [msg.position[msg.name.index(n)] for n in self.joint_names]
-            self.stamp["state"] = self.now()
-        if self.grip_joint in msg.name:
-            pos = msg.position[msg.name.index(self.grip_joint)]
-            self.grip_meas = (pos - self.closed) / (self.open - self.closed)
+        for arm in self.arms:
+            if all(n in msg.name for n in arm["joints"]):
+                arm["q_meas"] = [msg.position[msg.name.index(n)] for n in arm["joints"]]
+                self.stamp["state" + arm["key"]] = self.now()
+            if arm["grip_joint"] in msg.name:
+                pos = msg.position[msg.name.index(arm["grip_joint"])]
+                arm["grip_meas"] = (pos - self.closed) / (self.open - self.closed)
 
-    def on_cmd(self, msg):                                  # arm and gripper commands arrive as separate messages
-        if all(n in msg.name for n in self.joint_names):
-            self.q_cmd = [msg.position[msg.name.index(n)] for n in self.joint_names]
-            self.stamp["action"] = self.now()
+    def on_cmd(self, msg):                                  # commands may arrive per arm or merged
+        for arm in self.arms:
+            if all(n in msg.name for n in arm["joints"]):
+                arm["q_cmd"] = [msg.position[msg.name.index(n)] for n in arm["joints"]]
+                self.stamp["action" + arm["key"]] = self.now()
 
-    def on_grip(self, msg):
-        self.grip_cmd = float(msg.data)
+    def on_grip(self, arm, msg):
+        arm["grip_cmd"] = float(msg.data)
 
     # ------------------------------------------------------------------ services
     def on_start(self, req, res):
@@ -161,17 +178,19 @@ class Recorder(Node):
         if not self.recording:
             return
         now = self.now()
-        missing = [k for k in ["state", "action", *self.cameras] if now - self.stamp.get(k, -1e9) > self.max_age]
-        if self.grip_meas is None:
-            missing.append("gripper joint in /joint_states")
-        if self.grip_cmd is None:
-            missing.append("gripper state")
+        keys = [k + arm["key"] for arm in self.arms for k in ("state", "action")] + self.cameras
+        missing = [k for k in keys if now - self.stamp.get(k, -1e9) > self.max_age]
+        for arm in self.arms:
+            if arm["grip_meas"] is None:
+                missing.append(f"gripper joint {arm['grip_joint']} in joint states")
+            if arm["grip_cmd"] is None:
+                missing.append(f"gripper state {arm['grip_topic']}")
         if missing:
             self.skipped += 1
             self.get_logger().warn(f"skipping frames, no recent: {', '.join(missing)}", throttle_duration_sec=2.0)
             return
-        state = self.q_meas + [self.grip_meas]
-        action = self.q_cmd + [self.grip_cmd]
+        state = [v for arm in self.arms for v in arm["q_meas"] + [arm["grip_meas"]]]
+        action = [v for arm in self.arms for v in arm["q_cmd"] + [arm["grip_cmd"]]]
         try:
             self.writer.add_frame(state, action, {c: image_to_rgb(self.images[c]) for c in self.cameras})
         except ValueError as e:
