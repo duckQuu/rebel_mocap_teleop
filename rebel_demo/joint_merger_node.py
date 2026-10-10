@@ -6,8 +6,10 @@ keeps the latest position of every joint it has heard and publishes all of them 
 
 Parameters (defaults in brackets)
   inputs ['']                 comma-separated input topics, e.g. "/rebel_teleop_left/joint_commands,..."
-  output [/isaac_joint_commands]   topic Isaac subscribes to
+  output [/dual_arm/isaac_joint_commands]   topic Isaac subscribes to (RViz-only: the joint-state topic)
   rate_hz [60]
+  defaults ['']               comma-separated joints published at 0.0 until a real value arrives (RViz-only testing:
+                              the joints Isaac normally supplies, so robot_state_publisher gets a complete state)
 """
 import rclpy
 from rclpy.node import Node
@@ -19,11 +21,12 @@ class JointMerger(Node):
         super().__init__("joint_merger")
         d = self.declare_parameter
         inputs = [t.strip() for t in d("inputs", "").value.split(",") if t.strip()]
-        output = d("output", "/isaac_joint_commands").value
+        output = d("output", "/dual_arm/isaac_joint_commands").value
         rate = float(d("rate_hz", 60.0).value)
         if not inputs:
             raise ValueError("joint_merger: set 'inputs' (comma-separated JointState topics)")
-        self.latest = {}                                    # joint name -> position (insertion order kept)
+        defaults = [n.strip() for n in d("defaults", "").value.split(",") if n.strip()]
+        self.latest = {n: 0.0 for n in defaults}            # joint name -> position (insertion order kept)
         for t in inputs:
             self.create_subscription(JointState, t, self.on_cmd, 10)
         self.pub = self.create_publisher(JointState, output, 10)

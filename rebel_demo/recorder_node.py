@@ -1,8 +1,8 @@
 """recorder node - records teleop demonstrations as a GR00T / LeRobot v2 dataset.
 
 Every 1/fps s while recording, one frame = the latest of each input:
-  observation.state  [joint1..joint6 (rad, measured /joint_states), gripper (0 closed .. 1 open, measured)]
-  action             [joint1..joint6 (rad, commanded on command_topic), gripper (0/1 commanded state)]
+  observation.state  per arm: [6 joints (rad, measured on joint_states_topic), gripper (0 closed .. 1 open, measured)]
+  action             per arm: [6 joints (rad, commanded on command_topic), gripper (0/1 commanded state)]
   observation.images.<cam>   from each sensor_msgs/Image topic in `cameras`
 A frame is skipped (and counted) when an input is missing or older than max_age.
 
@@ -14,16 +14,12 @@ Services (std_srvs/Trigger):
 Parameters (defaults in brackets)
   dataset_dir [~/rebel_datasets/rebel_xeg32]   appended to if it already exists
   fps [30]   cameras ['front:/rgb']  ("name:/topic,name2:/topic2")   image_size [[0, 0]] (w, h; 0 = as received)
-  joint_states_topic [/joint_states]   command_topic [/isaac_joint_commands]
-  gripper_state_topic [/rebel_gripper/state]   max_age [0.5]
-  gripper_joint [xeg32_left_carriage_joint]  closed_pos / open_pos   (measured gripper -> 0..1)
-  joint_prefix ['']   arm joints = prefix + joint1..joint6 (arm_left_ / arm_right_ for the dual-arm rig);
-                      the dataset always names them joint1..joint6
-  joint_names ['']    6 comma-separated names (base to wrist), overrides joint_prefix
-  arms ['']           '' = one arm (parameters above) | "left,right" = both arms of the dual-arm rig:
-                      joints arm_<side>_joint1..6, gripper arm_<side>_xeg32_left_carriage_joint,
-                      gripper state /rebel_gripper_<side>/state; dataset parts left_arm, left_gripper,
-                      right_arm, right_gripper (gripper_joint / joint_prefix / joint_names are ignored)
+  arms [left]   "left", "right" or "left,right": which arms of the dual-arm rig are recorded. Joints are
+                arm_<side>_joint1..6, gripper arm_<side>_xeg32_left_carriage_joint, gripper state
+                /rebel_gripper[_<side>]/state. Dataset parts: single_arm + gripper for one arm,
+                left_arm / left_gripper / right_arm / right_gripper for both (joint names joint1..6 / left_joint1..).
+  joint_states_topic [/dual_arm/isaac_joint_states]   command_topic [/dual_arm/isaac_joint_commands]
+  max_age [0.5]   closed_pos / open_pos   (measured gripper -> 0..1)
   task ['']
 Needs pyarrow (pip install pyarrow) and ffmpeg (sudo apt install ffmpeg).
 """
@@ -65,31 +61,26 @@ class Recorder(Node):
         self.fps = float(d("fps", 30.0).value)
         cams = [c.split(":", 1) for c in d("cameras", "front:/rgb").value.split(",") if c.strip()]
         w, h = (int(v) for v in d("image_size", [0, 0]).value)
-        grip_joint = d("gripper_joint", "xeg32_left_carriage_joint").value
         self.closed = float(d("closed_pos", CLOSED_POS).value)
         self.open = float(d("open_pos", OPEN_POS).value)
         self.max_age = float(d("max_age", 0.5).value)
-        prefix = d("joint_prefix", "").value
-        custom = [n.strip() for n in d("joint_names", "").value.split(",") if n.strip()]
-        if custom and len(custom) != 6:
-            raise ValueError(f"joint_names needs 6 comma-separated names, got {len(custom)}: {custom}")
-        grip_topic = d("gripper_state_topic", "/rebel_gripper/state").value
-        sides = [s.strip() for s in d("arms", "").value.split(",") if s.strip()]
+        sides = [x.strip() for x in d("arms", "left").value.split(",") if x.strip()]
+        if not sides or any(x not in ("left", "right") for x in sides):
+            raise ValueError(f"arms must be left, right or left,right - got {sides}")
         d("task", "")
 
         # one entry per recorded arm: joints / gripper joint to read, dataset part names, latest values
-        if sides:
-            self.arms = [{"key": s, "joints": [f"arm_{s}_{n}" for n in JOINT_NAMES],
-                          "grip_joint": f"arm_{s}_xeg32_left_carriage_joint",
-                          "grip_topic": f"/rebel_gripper_{s}/state",
-                          "parts": (f"{s}_arm", [f"{s}_{n}" for n in JOINT_NAMES], f"{s}_gripper", [f"{s}_gripper"])}
-                         for s in sides]
-        else:
-            self.arms = [{"key": "", "joints": custom or [prefix + n for n in JOINT_NAMES], "grip_joint": grip_joint,
-                          "grip_topic": grip_topic, "parts": ("single_arm", JOINT_NAMES, "gripper", ["gripper"])}]
+        both = len(sides) > 1
+        self.arms = []
+        for side in sides:
+            # launch node names: rebel_gripper_<side> with two hands, rebel_gripper with one
+            grip_topic = f"/rebel_gripper_{side}/state" if both else "/rebel_gripper/state"
+            parts = ((f"{side}_arm", [f"{side}_{n}" for n in JOINT_NAMES], f"{side}_gripper", [f"{side}_gripper"])
+                     if both else ("single_arm", JOINT_NAMES, "gripper", ["gripper"]))
+            self.arms.append({"key": side, "joints": [f"arm_{side}_{n}" for n in JOINT_NAMES],
+                              "grip_joint": f"arm_{side}_xeg32_left_carriage_joint", "grip_topic": grip_topic,
+                              "parts": parts, "q_meas": None, "q_cmd": None, "grip_meas": None, "grip_cmd": None})
         parts = [p for arm in self.arms for p in ((arm["parts"][0], arm["parts"][1]), (arm["parts"][2], arm["parts"][3]))]
-        for arm in self.arms:
-            arm.update(q_meas=None, q_cmd=None, grip_meas=None, grip_cmd=None)
 
         self.cameras = [n.strip() for n, _ in cams]
         self.writer = LeRobotWriter(root, self.fps, self.cameras, state_parts=parts, action_parts=parts,
@@ -99,8 +90,8 @@ class Recorder(Node):
         self.stamp = {}                                     # input -> receive time [s]
         for name, topic in cams:
             self.create_subscription(Image, topic.strip(), lambda m, n=name.strip(): self.on_image(n, m), 2)
-        self.create_subscription(JointState, d("joint_states_topic", "/joint_states").value, self.on_js, 10)
-        self.create_subscription(JointState, d("command_topic", "/isaac_joint_commands").value, self.on_cmd, 10)
+        self.create_subscription(JointState, d("joint_states_topic", "/dual_arm/isaac_joint_states").value, self.on_js, 10)
+        self.create_subscription(JointState, d("command_topic", "/dual_arm/isaac_joint_commands").value, self.on_cmd, 10)
         for arm in self.arms:
             self.create_subscription(Int32, arm["grip_topic"], lambda m, arm=arm: self.on_grip(arm, m), 10)
         self.create_service(Trigger, "~/start", self.on_start)
